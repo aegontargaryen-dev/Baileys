@@ -31,6 +31,7 @@ import {
 	getUrlFromDirectPath,
 	getWAUploadToServer,
 	MessageRetryCoordinator,
+	isViewOnceMessage,
 	MessageRetryManager,
 	normalizeMessageContent,
 	parseAndInjectE2ESessions,
@@ -1053,6 +1054,12 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				})
 
 				logger.debug({ jid }, 'adding device identity')
+			}
+
+			// WA Web marks view once sends at the stanza level too, not just in the
+			// protobuf wrapper. Adding it here also covers retry resends.
+			if (isViewOnceMessage(message)) {
+				;(stanza.content as BinaryNode[]).push({ tag: 'meta', attrs: { view_once: 'true' } })
 			}
 
 			if (
