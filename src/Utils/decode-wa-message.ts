@@ -413,7 +413,10 @@ export const decryptMessageNode = (
 									? {
 											messageContextInfo: {
 												...outerMessage.messageContextInfo,
-												...innerMessage.messageContextInfo
+												...innerMessage.messageContextInfo,
+												messageSecret: innerMessage.messageContextInfo?.messageSecret?.length
+													? innerMessage.messageContextInfo.messageSecret
+													: outerMessage.messageContextInfo?.messageSecret
 											}
 										}
 									: {})

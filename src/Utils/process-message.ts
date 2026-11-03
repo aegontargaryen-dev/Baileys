@@ -24,6 +24,7 @@ import {
 	isHostedLidUser,
 	isHostedPnUser,
 	isJidBroadcast,
+	isJidGroup,
 	isJidStatusBroadcast,
 	isLidUser,
 	jidDecode,
@@ -124,8 +125,8 @@ export const cleanMessage = (message: WAMessage, meId: string, meLid: string) =>
 			jidDecode(message.key?.remoteJid!)?.user!,
 			isHostedPnUser(message.key.remoteJid!) ? 's.whatsapp.net' : 'lid'
 		)
-	} else {
-		message.key.remoteJid = jidNormalizedUser(message.key.remoteJid!)
+	} else if (message.key.remoteJid) {
+		message.key.remoteJid = jidNormalizedUser(message.key.remoteJid)
 	}
 
 	if (isHostedPnUser(message.key.participant!) || isHostedLidUser(message.key.participant!)) {
@@ -133,18 +134,18 @@ export const cleanMessage = (message: WAMessage, meId: string, meLid: string) =>
 			jidDecode(message.key.participant!)?.user!,
 			isHostedPnUser(message.key.participant!) ? 's.whatsapp.net' : 'lid'
 		)
-	} else {
-		message.key.participant = jidNormalizedUser(message.key.participant!)
+	} else if (message.key.participant) {
+		message.key.participant = jidNormalizedUser(message.key.participant)
 	}
 
 	const content = normalizeMessageContent(message.message)
 	// if the message has a reaction, ensure fromMe & remoteJid are from our perspective
-	if (content?.reactionMessage) {
-		normaliseKey(content.reactionMessage.key!)
+	if (content?.reactionMessage?.key) {
+		normaliseKey(content.reactionMessage.key)
 	}
 
-	if (content?.pollUpdateMessage) {
-		normaliseKey(content.pollUpdateMessage.pollCreationMessageKey!)
+	if (content?.pollUpdateMessage?.pollCreationMessageKey) {
+		normaliseKey(content.pollUpdateMessage.pollCreationMessageKey)
 	}
 
 	function normaliseKey(msgKey: WAMessageKey) {
@@ -260,6 +261,102 @@ export function decryptPollVote(
 	function toBinary(txt: string) {
 		return Buffer.from(txt)
 	}
+}
+
+async function decryptPollUpdateVote({
+	pollUpdateMessage,
+	creationMsgKey,
+	pollMsg,
+	messageKey,
+	meId,
+	meLid,
+	signalRepository,
+	logger
+}: {
+	pollUpdateMessage: proto.Message.IPollUpdateMessage
+	creationMsgKey: WAMessageKey
+	pollMsg: proto.IMessage
+	messageKey: WAMessageKey
+	meId: string
+	meLid?: string
+	signalRepository: SignalRepositoryWithLIDStore
+	logger?: ILogger
+}) {
+	const pollEncKey = pollMsg.messageContextInfo?.messageSecret
+	if (!pollEncKey) {
+		throw new Boom('Poll creation message is missing messageSecret for vote decryption')
+	}
+
+	const meIdNormalised = jidNormalizedUser(meId)
+	const meLidNormalised = meLid ? jidNormalizedUser(meLid) : undefined
+
+	const rawCreatorCandidates = [
+		getKeyAuthor(creationMsgKey, meIdNormalised),
+		creationMsgKey.fromMe ? meIdNormalised : undefined,
+		creationMsgKey.fromMe ? meLidNormalised : undefined,
+		creationMsgKey.participant,
+		creationMsgKey.participantAlt,
+		!isJidGroup(creationMsgKey.remoteJid || undefined) ? creationMsgKey.remoteJid : undefined,
+		creationMsgKey.remoteJidAlt
+	].filter((j): j is string => !!j)
+
+	const creatorCandidates = new Set<string>(rawCreatorCandidates.map(j => jidNormalizedUser(j)))
+	for (const candidate of [...creatorCandidates]) {
+		try {
+			const alt =
+				isLidUser(candidate) || isHostedLidUser(candidate)
+					? await signalRepository.lidMapping.getPNForLID(candidate)
+					: await signalRepository.lidMapping.getLIDForPN(candidate)
+			if (alt) {
+				creatorCandidates.add(jidNormalizedUser(alt))
+			}
+		} catch (err) {
+			logger?.debug({ err }, 'failed to resolve alternate creator JID for poll vote')
+		}
+	}
+
+	const rawVoterCandidates = [
+		getKeyAuthor(messageKey, meIdNormalised),
+		messageKey.fromMe ? meIdNormalised : undefined,
+		messageKey.fromMe ? meLidNormalised : undefined,
+		messageKey.participant,
+		messageKey.participantAlt,
+		!isJidGroup(messageKey.remoteJid || undefined) ? messageKey.remoteJid : undefined,
+		messageKey.remoteJidAlt
+	].filter((j): j is string => !!j)
+
+	const voterCandidates = new Set<string>(rawVoterCandidates.map(j => jidNormalizedUser(j)))
+	for (const candidate of [...voterCandidates]) {
+		try {
+			const alt =
+				isLidUser(candidate) || isHostedLidUser(candidate)
+					? await signalRepository.lidMapping.getPNForLID(candidate)
+					: await signalRepository.lidMapping.getLIDForPN(candidate)
+			if (alt) {
+				voterCandidates.add(jidNormalizedUser(alt))
+			}
+		} catch (err) {
+			logger?.debug({ err }, 'failed to resolve alternate voter JID for poll vote')
+		}
+	}
+
+	let lastErr: unknown
+	for (const pollCreatorJid of creatorCandidates) {
+		for (const voterJid of voterCandidates) {
+			try {
+				return decryptPollVote(pollUpdateMessage.vote!, {
+					pollEncKey,
+					pollCreatorJid,
+					pollMsgId: creationMsgKey.id!,
+					voterJid
+				})
+			} catch (err) {
+				lastErr = err
+			}
+		}
+	}
+
+	throw lastErr
 }
 
 /**
@@ -537,7 +634,7 @@ const processMessage = async (
 				break
 			case proto.Message.ProtocolMessage.Type.GROUP_MEMBER_LABEL_CHANGE:
 				const labelAssociationMsg = protocolMsg.memberLabel
-				if (labelAssociationMsg?.label) {
+				if (labelAssociationMsg?.label !== undefined && labelAssociationMsg?.label !== null) {
 					ev.emit('group.member-tag.update', {
 						groupId: chat.id!,
 						label: labelAssociationMsg.label,
@@ -652,6 +749,21 @@ const processMessage = async (
 		const jid = message.key?.remoteJid!
 		//let actor = whatsappID (message.participant)
 		let participants: GroupParticipant[]
+		const parseStubParticipant = (a: unknown): GroupParticipant => {
+			if (typeof a === 'string') {
+				try {
+					const parsed = JSON.parse(a)
+					if (parsed && typeof parsed === 'object') {
+						return parsed as GroupParticipant
+					}
+				} catch {}
+
+				return { id: a, admin: null }
+			}
+
+			return a as GroupParticipant
+		}
+
 		const emitParticipantsUpdate = (action: ParticipantAction) =>
 			ev.emit('group-participants.update', {
 				id: jid,
@@ -690,12 +802,12 @@ const processMessage = async (
 
 		switch (message.messageStubType) {
 			case WAMessageStubType.GROUP_PARTICIPANT_CHANGE_NUMBER:
-				participants = message.messageStubParameters.map((a: any) => JSON.parse(a as string)) || []
+				participants = message.messageStubParameters.map(parseStubParticipant) || []
 				emitParticipantsUpdate('modify')
 				break
 			case WAMessageStubType.GROUP_PARTICIPANT_LEAVE:
 			case WAMessageStubType.GROUP_PARTICIPANT_REMOVE:
-				participants = message.messageStubParameters.map((a: any) => JSON.parse(a as string)) || []
+				participants = message.messageStubParameters.map(parseStubParticipant) || []
 				emitParticipantsUpdate('remove')
 				// mark the chat read only if you left the group
 				if (participantsIncludesMe()) {
@@ -706,7 +818,7 @@ const processMessage = async (
 			case WAMessageStubType.GROUP_PARTICIPANT_ADD:
 			case WAMessageStubType.GROUP_PARTICIPANT_INVITE:
 			case WAMessageStubType.GROUP_PARTICIPANT_ADD_REQUEST_JOIN:
-				participants = message.messageStubParameters.map((a: any) => JSON.parse(a as string)) || []
+				participants = message.messageStubParameters.map(parseStubParticipant) || []
 				if (participantsIncludesMe()) {
 					chat.readOnly = false
 				}
@@ -714,11 +826,11 @@ const processMessage = async (
 				emitParticipantsUpdate('add')
 				break
 			case WAMessageStubType.GROUP_PARTICIPANT_DEMOTE:
-				participants = message.messageStubParameters.map((a: any) => JSON.parse(a as string)) || []
+				participants = message.messageStubParameters.map(parseStubParticipant) || []
 				emitParticipantsUpdate('demote')
 				break
 			case WAMessageStubType.GROUP_PARTICIPANT_PROMOTE:
-				participants = message.messageStubParameters.map((a: any) => JSON.parse(a as string)) || []
+				participants = message.messageStubParameters.map(parseStubParticipant) || []
 				emitParticipantsUpdate('promote')
 				break
 			case WAMessageStubType.GROUP_CHANGE_ANNOUNCE:
@@ -758,77 +870,20 @@ const processMessage = async (
 				emitGroupRequestJoin(participant, action, method)
 				break
 		}
-	} else if (content?.pollUpdateMessage) {
-		const creationMsgKey = content.pollUpdateMessage.pollCreationMessageKey!
+	} else if (content?.pollUpdateMessage?.pollCreationMessageKey) {
+		const creationMsgKey = content.pollUpdateMessage.pollCreationMessageKey
 		const pollMsg = await getMessage(creationMsgKey)
 		if (pollMsg) {
 			try {
-				const meIdNormalised = jidNormalizedUser(meId)
-				const meLidNormalised = creds.me?.lid ? jidNormalizedUser(creds.me.lid) : undefined
-				const pollEncKey =
-					pollMsg.messageContextInfo?.messageSecret ||
-					normalizeMessageContent(pollMsg)?.messageContextInfo?.messageSecret
-
-				if (!pollEncKey) {
-					throw new Error('Missing pollEncKey (messageSecret) on poll creation message')
-				}
-
-				const creatorCandidates = new Set<string>(
-					[
-						getKeyAuthor(creationMsgKey, meIdNormalised),
-						...(creationMsgKey.fromMe && meLidNormalised ? [meLidNormalised] : []),
-						creationMsgKey.participant ? jidNormalizedUser(creationMsgKey.participant) : undefined,
-						creationMsgKey.remoteJid ? jidNormalizedUser(creationMsgKey.remoteJid) : undefined
-					].filter((v): v is string => !!v)
-				)
-				const voterCandidates = new Set<string>(
-					[
-						getKeyAuthor(message.key, meIdNormalised),
-						...(message.key.fromMe && meLidNormalised ? [meLidNormalised] : []),
-						message.key.participantAlt ? jidNormalizedUser(message.key.participantAlt) : undefined,
-						message.key.remoteJidAlt ? jidNormalizedUser(message.key.remoteJidAlt) : undefined
-					].filter((v): v is string => !!v)
-				)
-
-				for (const candidate of [...creatorCandidates]) {
-					try {
-						const alt = isLidUser(candidate)
-							? await signalRepository.lidMapping.getPNForLID(candidate)
-							: await signalRepository.lidMapping.getLIDForPN(candidate)
-						if (alt) creatorCandidates.add(jidNormalizedUser(alt))
-					} catch {}
-				}
-
-				for (const candidate of [...voterCandidates]) {
-					try {
-						const alt = isLidUser(candidate)
-							? await signalRepository.lidMapping.getPNForLID(candidate)
-							: await signalRepository.lidMapping.getLIDForPN(candidate)
-						if (alt) voterCandidates.add(jidNormalizedUser(alt))
-					} catch {}
-				}
-
-				let voteMsg: proto.Message.PollVoteMessage | undefined
-				let lastErr: unknown
-				outer: for (const pollCreatorJid of creatorCandidates) {
-					for (const voterJid of voterCandidates) {
-						try {
-							voteMsg = decryptPollVote(content.pollUpdateMessage.vote!, {
-								pollEncKey,
-								pollCreatorJid,
-								pollMsgId: creationMsgKey.id!,
-								voterJid
-							})
-							break outer
-						} catch (err) {
-							lastErr = err
-						}
-					}
-				}
-
-				if (!voteMsg) {
-					throw lastErr || new Error('Failed to decrypt poll vote')
-				}
+				const voteMsg = await decryptPollUpdateVote({
+					pollUpdateMessage: content.pollUpdateMessage,
+					creationMsgKey,
+					pollMsg,
+					messageKey: message.key,
+					meId,
+					meLid: creds.me?.lid,
+					signalRepository
+				})
 
 				ev.emit('messages.update', [
 					{
@@ -838,7 +893,7 @@ const processMessage = async (
 								{
 									pollUpdateMessageKey: message.key,
 									vote: voteMsg,
-									senderTimestampMs: toNumber(content.pollUpdateMessage.senderTimestampMs!)
+									senderTimestampMs: toNumber(content.pollUpdateMessage.senderTimestampMs)
 								}
 							]
 						}

@@ -26,9 +26,7 @@ describe('relayMessage retry resend', () => {
 		const wsSend = sock.ws.send as unknown as jest.MockedFunction<WebSocketSend>
 		wsSend.mockImplementation((_data, callback) => callback())
 
-		const validateSession = jest
-			.spyOn(sock.signalRepository, 'validateSession')
-			.mockResolvedValue({ exists: true })
+		const validateSession = jest.spyOn(sock.signalRepository, 'validateSession').mockResolvedValue({ exists: true })
 		const encryptMessage = jest.spyOn(sock.signalRepository, 'encryptMessage').mockResolvedValue({
 			type: 'msg',
 			ciphertext: Buffer.from('encrypted')

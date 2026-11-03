@@ -4,6 +4,7 @@ import { isHostedLidUser, isHostedPnUser, isLidUser, isPnUser, jidNormalizedUser
 import { aesDecryptGCM, hmacSign } from './crypto'
 import { toNumber } from './generics'
 import type { ILogger } from './logger'
+import { normalizeMessageContent } from './messages'
 
 type MessageEditContext = {
 	originalSenderJid: string
@@ -77,7 +78,9 @@ const getOriginalSenderJids = (
 		return envelopeAuthorJids
 	}
 
-	return isUserJid(message.key.remoteJid) ? [targetKey.remoteJid] : [targetKey.participant]
+	return isUserJid(message.key.remoteJid)
+		? [targetKey.remoteJid, ...envelopeAuthorJids]
+		: [targetKey.participant, ...envelopeAuthorJids]
 }
 
 const decryptWithJidCandidates = (
@@ -185,7 +188,9 @@ export const processEncryptedMessageEdit = async ({
 		return
 	}
 
-	const messageSecret = originalMessage?.messageContextInfo?.messageSecret
+	const messageSecret =
+		originalMessage?.messageContextInfo?.messageSecret ||
+		normalizeMessageContent(originalMessage)?.messageContextInfo?.messageSecret
 	if (!(messageSecret instanceof Uint8Array) || messageSecret.byteLength !== 32) {
 		logger.warn(
 			{ foundOriginal: !!originalMessage, secretLength: messageSecret?.byteLength },

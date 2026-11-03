@@ -1,5 +1,4 @@
 import { createHmac } from 'node:crypto'
-import type { ILogger } from './logger'
 import type { SignalKeyStoreWithTransaction } from '../Types'
 import type { BinaryNode } from '../WABinary'
 import {
@@ -12,6 +11,7 @@ import {
 	isPnUser,
 	jidNormalizedUser
 } from '../WABinary'
+import type { ILogger } from './logger'
 
 // Same phone-number pattern as WABinary's isJidBot, applied against the user
 // part so the check is invariant to @c.us ↔ @s.whatsapp.net normalization.

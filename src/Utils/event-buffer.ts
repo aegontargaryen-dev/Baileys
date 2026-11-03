@@ -516,9 +516,10 @@ function append<E extends BufferableEvent>(
 
 				if (data.messageUpdates[key]) {
 					logger.debug('absorbed prior message update in message upsert')
+					const priorUpdate = data.messageUpdates[key].update
 					const messageTimestamp = message.messageTimestamp
-					Object.assign(message, data.messageUpdates[key].update)
-					if (messageTimestamp !== undefined) {
+					Object.assign(message, priorUpdate)
+					if (messageTimestamp !== undefined && !priorUpdate.message) {
 						message.messageTimestamp = messageTimestamp
 					}
 
@@ -544,7 +545,7 @@ function append<E extends BufferableEvent>(
 				if (existing) {
 					const messageTimestamp = existing.messageTimestamp
 					Object.assign(existing, update)
-					if (messageTimestamp !== undefined) {
+					if (messageTimestamp !== undefined && !update.message) {
 						existing.messageTimestamp = messageTimestamp
 					}
 

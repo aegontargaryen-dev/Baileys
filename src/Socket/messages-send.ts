@@ -30,8 +30,8 @@ import {
 	getStatusCodeForMediaRetry,
 	getUrlFromDirectPath,
 	getWAUploadToServer,
-	MessageRetryCoordinator,
 	isViewOnceMessage,
+	MessageRetryCoordinator,
 	MessageRetryManager,
 	normalizeMessageContent,
 	parseAndInjectE2ESessions,
@@ -40,9 +40,9 @@ import {
 } from '../Utils'
 import { prepareMessageForBot } from '../Utils/bot-message'
 import { getUrlInfo } from '../Utils/link-preview'
-import { resolveStatusJidList } from '../Utils/status-broadcast'
 import { makeKeyedMutex, makeMutex } from '../Utils/make-mutex'
 import { getMessageReportingToken, shouldIncludeReportingToken } from '../Utils/reporting-utils'
+import { resolveStatusJidList } from '../Utils/status-broadcast'
 import {
 	buildMergedTcTokenIndexWrite,
 	computeCsToken,
@@ -62,8 +62,11 @@ import {
 	isHostedLidUser,
 	isHostedPnUser,
 	isJidBot,
+	isJidBroadcast,
 	isJidGroup,
 	isJidMetaAI,
+	isJidNewsletter,
+	isJidStatusBroadcast,
 	isLidUser,
 	isPnUser,
 	jidDecode,
@@ -95,7 +98,7 @@ export const buildRetryResendAddressing = (
 	meId: string,
 	meLid: string | undefined
 ): BinaryNodeAttributes => {
-	if (isJidGroup(destinationJid)) {
+	if (isJidGroup(destinationJid) || isJidStatusBroadcast(destinationJid) || isJidBroadcast(destinationJid)) {
 		return { to: destinationJid, participant: participantJid }
 	}
 
@@ -405,7 +408,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				// Process all devices for this user
 				for (const item of userDevices) {
 					const finalJid = isLidUser
-						? jidEncode(user, item.server, item.device)
+						? jidEncode(user, item.server === 'hosted' ? 'hosted.lid' : item.server, item.device)
 						: jidEncode(item.user, item.server, item.device)
 
 					deviceResults.push({
@@ -673,7 +676,12 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 			statusJidList
 		}: MessageRelayOptions
 	) => {
-		if (jidDecode(jid)?.server === 's.whatsapp.net') {
+		if (
+			jidDecode(jid)?.server === 's.whatsapp.net' &&
+			!participant &&
+			additionalAttributes?.['category'] !== 'peer' &&
+			!areJidsSameUser(jid, authState.creds.me?.id)
+		) {
 			try {
 				const mappedLid = await getLIDForPN(jid)
 				if (mappedLid) {
@@ -733,16 +741,17 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 			}
 
 			if (isNewsletter) {
-				const patched = (patchMessageBeforeSending ? await patchMessageBeforeSending(message, []) : message) as proto.IMessage
+				const patched = (
+					patchMessageBeforeSending ? await patchMessageBeforeSending(message, []) : message
+				) as proto.IMessage
 				const isNewsletterEdit =
 					!!patched.protocolMessage?.editedMessage &&
 					patched.protocolMessage.type === proto.Message.ProtocolMessage.Type.MESSAGE_EDIT
-				const isNewsletterRevoke =
-					patched.protocolMessage?.type === proto.Message.ProtocolMessage.Type.REVOKE
+				const isNewsletterRevoke = patched.protocolMessage?.type === proto.Message.ProtocolMessage.Type.REVOKE
 				const newsletterPayload = isNewsletterEdit ? patched.protocolMessage!.editedMessage! : patched
 				const newsletterMediaType = getMediaType(normalizeMessageContent(newsletterPayload) || newsletterPayload)
 				if (!isNewsletterRevoke) {
-					const bytes = encodeNewsletterMessage(newsletterPayload as proto.IMessage)
+					const bytes = encodeNewsletterMessage(newsletterPayload)
 					binaryNodeContent.push({
 						tag: 'plaintext',
 						attrs: newsletterMediaType ? { mediatype: newsletterMediaType } : {},
@@ -760,9 +769,9 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 						to: jid,
 						id: (isNewsletterEdit || isNewsletterRevoke ? patched.protocolMessage?.key?.id : undefined) || msgId,
 						type: getMessageType(newsletterPayload),
+						...(additionalAttributes || {}),
 						...(isNewsletterEdit ? { edit: '1' } : {}),
-						...(isNewsletterRevoke ? { edit: '8' } : {}),
-						...(additionalAttributes || {})
+						...(isNewsletterRevoke ? { edit: '8' } : {})
 					},
 					content: binaryNodeContent
 				}
@@ -1285,6 +1294,8 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 			return 'image'
 		} else if (message.videoMessage) {
 			return message.videoMessage.gifPlayback ? 'gif' : 'video'
+		} else if (message.ptvMessage) {
+			return 'ptv'
 		} else if (message.audioMessage) {
 			return message.audioMessage.ptt ? 'ptt' : 'audio'
 		} else if (message.contactMessage) {
@@ -1411,7 +1422,9 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 								}
 
 								content.directPath = media.directPath
-								content.url = getUrlFromDirectPath(content.directPath!, mediaHost)
+								if (!('stickerPackId' in content)) {
+									;(content as { url?: string | null }).url = getUrlFromDirectPath(content.directPath!, mediaHost)
+								}
 
 								logger.debug({ directPath: media.directPath, key: result.key }, 'media update successful')
 							} catch (err: any) {
@@ -1433,17 +1446,6 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 			return message
 		},
 		sendMessage: async (jid: string, content: AnyMessageContent, options: MiscMessageGenerationOptions = {}) => {
-			if (jidDecode(jid)?.server === 's.whatsapp.net') {
-				try {
-					const mappedLid = await getLIDForPN(jid)
-					if (mappedLid) {
-						jid = mappedLid
-					}
-				} catch (error: any) {
-					logger.debug({ jid, err: error?.message }, 'failed to check LID mapping for PN')
-				}
-			}
-
 			const userJid = authState.creds.me!.id
 			if (
 				typeof content === 'object' &&
@@ -1492,7 +1494,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				// required for delete
 				if (isDeleteMsg) {
 					// if the chat is a group, and I am not the author, then delete the message as an admin
-					if (isJidGroup(content.delete?.remoteJid as string) && !content.delete?.fromMe) {
+					if ((isJidGroup(content.delete?.remoteJid as string) && !content.delete?.fromMe) || isJidNewsletter(jid)) {
 						additionalAttributes.edit = '8'
 					} else {
 						additionalAttributes.edit = '7'

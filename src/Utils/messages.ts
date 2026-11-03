@@ -189,9 +189,16 @@ export const prepareWAMessageMedia = async (
 		)
 
 		const fileSha256B64 = fileSha256.toString('base64')
+		const newsletterMediaType = uploadData.ptt
+			? 'ptt'
+			: uploadData.gifPlayback
+				? 'gif'
+				: uploadData.ptv
+					? 'ptv'
+					: mediaType
 		const { directPath, thumbnailDirectPath, thumbnailSha256 } = await options.upload(filePath, {
 			fileEncSha256B64: fileSha256B64,
-			mediaType: mediaType,
+			mediaType: newsletterMediaType,
 			timeoutMs: options.mediaUploadTimeoutMs,
 			newsletter: true
 		})
@@ -235,7 +242,8 @@ export const prepareWAMessageMedia = async (
 	const requiresWaveformProcessing =
 		mediaType === 'audio' && uploadData.ptt === true && typeof uploadData.waveform === 'undefined'
 	const requiresAudioBackground = options.backgroundColor && mediaType === 'audio' && uploadData.ptt === true
-	const requiresOriginalForSomeProcessing = requiresDurationComputation || requiresThumbnailComputation
+	const requiresOriginalForSomeProcessing =
+		requiresDurationComputation || requiresThumbnailComputation || requiresWaveformProcessing
 	const { mediaKey, encFilePath, originalFilePath, fileEncSha256, fileSha256, fileLength } = await encryptedStream(
 		uploadData.media,
 		options.mediaTypeOverride || mediaType,
@@ -363,7 +371,10 @@ export const generateForwardMessageContent = (message: WAMessage, forceForward?:
 	content = normalizeMessageContent(content)
 	content = proto.Message.decode(proto.Message.encode(content!).finish())
 
-	let key = Object.keys(content)[0] as keyof proto.IMessage
+	let key = getContentType(content)
+	if (!key) {
+		throw new Boom('no content type in message', { statusCode: 400 })
+	}
 
 	let score = (content?.[key] as { contextInfo: proto.IContextInfo })?.contextInfo?.forwardingScore || 0
 	score += message.key.fromMe && !forceForward ? 0 : 1
@@ -376,9 +387,9 @@ export const generateForwardMessageContent = (message: WAMessage, forceForward?:
 
 	const key_ = content?.[key] as { contextInfo: proto.IContextInfo }
 	if (score > 0) {
-		key_.contextInfo = { forwardingScore: score, isForwarded: true }
+		key_.contextInfo = { ...key_.contextInfo, forwardingScore: score, isForwarded: true }
 	} else {
-		key_.contextInfo = {}
+		key_.contextInfo = { ...key_.contextInfo }
 	}
 
 	return content
@@ -910,6 +921,8 @@ export const extractMessageContent = (content: WAMessageContent | undefined | nu
 			return { videoMessage: header.videoMessage }
 		} else if (header.locationMessage) {
 			return { locationMessage: header.locationMessage }
+		} else if (header.productMessage) {
+			return extractMessageContent({ productMessage: header.productMessage })
 		}
 	}
 
@@ -1215,15 +1228,21 @@ export const downloadMediaMessage = async <Type extends 'buffer' | 'stream'>(
 		}
 
 		const contentType = getContentType(mContent)
-		let mediaType = contentType?.replace('Message', '') as MediaType
+		let mediaType = (
+			contentType === 'stickerPackMessage' ? 'sticker-pack' : contentType?.replace('Message', '')
+		) as MediaType
 		const media = mContent[contentType!]
 
-		if (!media || typeof media !== 'object' || (!('url' in media) && !('thumbnailDirectPath' in media))) {
+		if (
+			!media ||
+			typeof media !== 'object' ||
+			(!('url' in media) && !('directPath' in media) && !('thumbnailDirectPath' in media))
+		) {
 			throw new Boom(`"${contentType}" message is not a media message`)
 		}
 
 		let download: DownloadableMessage
-		if ('thumbnailDirectPath' in media && !('url' in media)) {
+		if ('thumbnailDirectPath' in media && !('url' in media) && !('directPath' in media)) {
 			download = {
 				directPath: media.thumbnailDirectPath,
 				mediaKey: media.mediaKey
@@ -1255,7 +1274,8 @@ export const assertMediaContent = (content: proto.IMessage | null | undefined) =
 		content?.imageMessage ||
 		content?.videoMessage ||
 		content?.audioMessage ||
-		content?.stickerMessage
+		content?.stickerMessage ||
+		content?.stickerPackMessage
 	if (!mediaContent) {
 		throw new Boom('given message is not a media message', { statusCode: 400, data: content })
 	}
@@ -1402,6 +1422,10 @@ export function readStoredZip(zipBuf: Uint8Array): Record<string, Uint8Array> {
 		const extraLen = buf.readUInt16LE(offset + 28)
 		const nameStart = offset + 30
 		const dataStart = nameStart + nameLen + extraLen
+		if (dataStart + compressedSize > buf.length) {
+			break
+		}
+
 		const name = buf.toString('utf8', nameStart, nameStart + nameLen)
 		result[name] = new Uint8Array(buf.subarray(dataStart, dataStart + compressedSize))
 		offset = dataStart + compressedSize
@@ -1426,7 +1450,9 @@ async function prepareStickerPackMessage(
 
 	const stickerPackIdValue = packId || generateMessageIDV2()
 
-	const lib = await getImageProcessingLibrary()
+	const lib = await getImageProcessingLibrary().catch(
+		() => ({}) as Awaited<ReturnType<typeof getImageProcessingLibrary>>
+	)
 	const stickerData: Record<string, Uint8Array> = {}
 	const stickerPromises = stickers.map(async (s, i) => {
 		const { stream } = await getStream(s.data)

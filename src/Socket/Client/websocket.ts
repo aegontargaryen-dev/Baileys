@@ -45,6 +45,11 @@ export class WebSocketClient extends AbstractSocketClient {
 			return
 		}
 
+		if (this.socket.readyState === this.socket.CLOSED) {
+			this.socket = null
+			return
+		}
+
 		const closePromise = new Promise<void>(resolve => {
 			this.socket?.once('close', resolve)
 		})

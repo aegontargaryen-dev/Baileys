@@ -76,14 +76,7 @@ const createAnimatedWebP = async (): Promise<Buffer> => {
 
 	const anmfChunk = Buffer.concat([anmfHeader, vp8lChunk])
 
-	const animatedBuffer = Buffer.concat([
-		riffHeader,
-		Buffer.alloc(4),
-		webpHeader,
-		vp8xChunk,
-		animChunk,
-		anmfChunk
-	])
+	const animatedBuffer = Buffer.concat([riffHeader, Buffer.alloc(4), webpHeader, vp8xChunk, animChunk, anmfChunk])
 	animatedBuffer.writeUInt32LE(animatedBuffer.length - 8, 4)
 	return animatedBuffer
 }

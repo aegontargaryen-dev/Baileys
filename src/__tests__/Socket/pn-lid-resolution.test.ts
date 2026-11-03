@@ -41,31 +41,31 @@ describe('PN to LID Resolution (Issues #2683, #2698, #2688)', () => {
 					const tag = name.slice(4)
 					process.nextTick(async () => {
 						let content: any[] = []
-							const buf = Buffer.from(data)
-							let decoded: any = null
-							for (let offset = 0; offset < 20 && offset < buf.length; offset++) {
-								try {
-									decoded = await decodeBinaryNode(buf.slice(offset))
-									break
-								} catch {
-									// try next offset
-								}
+						const buf = Buffer.from(data)
+						let decoded: any = null
+						for (let offset = 0; offset < 20 && offset < buf.length; offset++) {
+							try {
+								decoded = await decodeBinaryNode(buf.slice(offset))
+								break
+							} catch {
+								// try next offset
 							}
+						}
 
-							if (decoded && decoded.tag === 'iq' && decoded.attrs.to?.endsWith('@g.us')) {
-								content = [
-									{
-										tag: 'group',
-										attrs: {
-											id: decoded.attrs.to.split('@')[0],
-											creation: '1700000000',
-											s_t: '1700000000',
-											subject: 'Test Group',
-										},
-										content: []
-									}
-								]
-							}
+						if (decoded && decoded.tag === 'iq' && decoded.attrs.to?.endsWith('@g.us')) {
+							content = [
+								{
+									tag: 'group',
+									attrs: {
+										id: decoded.attrs.to.split('@')[0],
+										creation: '1700000000',
+										s_t: '1700000000',
+										subject: 'Test Group'
+									},
+									content: []
+								}
+							]
+						}
 
 						const responseNode = {
 							tag: 'iq',

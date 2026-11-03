@@ -1170,7 +1170,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 				// Server sends two notifications: immediately after companion_hello (stage=undefined,
 				// only link_code_pairing_ref) and after phone enters code (stage="primary_hello",
 				// all 3 crypto fields). Only process the latter.
-				if(linkCodeCompanionReg?.attrs?.stage !== 'primary_hello') break
+				if (linkCodeCompanionReg?.attrs?.stage !== 'primary_hello') break
 				const ref = toRequiredBuffer(getBinaryNodeChildBuffer(linkCodeCompanionReg, 'link_code_pairing_ref'))
 				const primaryIdentityPublicKey = toRequiredBuffer(
 					getBinaryNodeChildBuffer(linkCodeCompanionReg, 'primary_identity_pub')
@@ -1239,6 +1239,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 				ev.emit('creds.update', authState.creds)
 				break
 			}
+
 			case 'privacy_token':
 				await handlePrivacyTokenNotification(node)
 				break
@@ -1432,7 +1433,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 		// if it's the primary jid sending the request
 		// just re-send the message to everyone
 		// prevents the first message decryption failure
-		const sendToAll = !jidDecode(participant)?.device
+		const sendToAll = !jidDecode(participant)?.device && !isJidStatusBroadcast(remoteJid)
 
 		const sessionId = signalRepository.jidToSignalProtocolAddress(participant)
 		let injectedFromBundle = false
@@ -2250,6 +2251,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 		for (const timer of identityChangeCleanupTimers.values()) {
 			clearTimeout(timer)
 		}
+
 		identityChangeCleanupTimers.clear()
 		sock.recentlyChangedIdentities?.clear()
 		sendActiveReceipts = false

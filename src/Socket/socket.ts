@@ -832,7 +832,7 @@ export const makeSocket = (config: SocketConfig) => {
 							{
 								tag: 'link_code_pairing_nonce',
 								attrs: {},
-								content: '0'
+								content: Buffer.alloc(1)
 							}
 						]
 					}
