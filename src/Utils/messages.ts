@@ -849,7 +849,12 @@ export const normalizeMessageContent = (content: WAMessageContent | null | undef
 			message?.editedMessage ||
 			message?.associatedChildMessage ||
 			message?.groupStatusMessage ||
-			message?.groupStatusMessageV2
+			message?.groupStatusMessageV2 ||
+			message?.lottieStickerMessage ||
+			message?.groupMentionedMessage ||
+			message?.botInvokeMessage ||
+			message?.commentMessage ||
+			message?.bcallMessage
 		)
 	}
 }
@@ -894,6 +899,19 @@ export const extractMessageContent = (content: WAMessageContent | undefined | nu
 
 	if (content?.buttonsMessage) {
 		return extractFromTemplateMessage(content.buttonsMessage)
+	}
+
+	if (content?.interactiveMessage?.header) {
+		const header = content.interactiveMessage.header
+		if (header.imageMessage) {
+			return { imageMessage: header.imageMessage }
+		} else if (header.documentMessage) {
+			return { documentMessage: header.documentMessage }
+		} else if (header.videoMessage) {
+			return { videoMessage: header.videoMessage }
+		} else if (header.locationMessage) {
+			return { locationMessage: header.locationMessage }
+		}
 	}
 
 	if (content?.templateMessage?.hydratedFourRowTemplate) {

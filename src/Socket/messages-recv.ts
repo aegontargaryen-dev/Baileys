@@ -1861,7 +1861,8 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 								}
 
 								const encNode = getBinaryNodeChild(node, 'enc')
-								await sendRetryRequest(node, !encNode)
+								const isMissingPreKey = msg.messageStubParameters?.[0] === MISSING_KEYS_ERROR_TEXT
+								await sendRetryRequest(node, !encNode || isMissingPreKey)
 								if (retryRequestDelayMs) {
 									await delay(retryRequestDelayMs)
 								}

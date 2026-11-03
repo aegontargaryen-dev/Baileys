@@ -13,6 +13,7 @@ export class LIDMappingStore {
 	private readonly logger: ILogger
 
 	private pnToLIDFunc?: (jids: string[]) => Promise<LIDMapping[] | undefined>
+	public onMappingStored?: (mapping: LIDMapping) => void
 
 	private readonly inflightLIDLookups = new Map<string, Promise<LIDMapping[] | null>>()
 	private readonly inflightPNLookups = new Map<string, Promise<LIDMapping[] | null>>()
@@ -20,11 +21,13 @@ export class LIDMappingStore {
 	constructor(
 		keys: SignalKeyStoreWithTransaction,
 		logger: ILogger,
-		pnToLIDFunc?: (jids: string[]) => Promise<LIDMapping[] | undefined>
+		pnToLIDFunc?: (jids: string[]) => Promise<LIDMapping[] | undefined>,
+		onMappingStored?: (mapping: LIDMapping) => void
 	) {
 		this.keys = keys
 		this.pnToLIDFunc = pnToLIDFunc
 		this.logger = logger
+		this.onMappingStored = onMappingStored
 	}
 
 	async storeLIDPNMappings(pairs: LIDMapping[]): Promise<void> {
@@ -37,8 +40,11 @@ export class LIDMappingStore {
 				continue
 			}
 
-			const lidDecoded = jidDecode(lid)
-			const pnDecoded = jidDecode(pn)
+			const actualLid = isLidUser(lid) ? lid : pn
+			const actualPn = isLidUser(lid) ? pn : lid
+
+			const lidDecoded = jidDecode(actualLid)
+			const pnDecoded = jidDecode(actualPn)
 			if (!lidDecoded || !pnDecoded) continue
 
 			validatedPairs.push({ pnUser: pnDecoded.user, lidUser: lidDecoded.user })
@@ -102,6 +108,10 @@ export class LIDMappingStore {
 		for (const [pnUser, lidUser] of Object.entries(pairMap)) {
 			this.mappingCache.set(`pn:${pnUser}`, lidUser)
 			this.mappingCache.set(`lid:${lidUser}`, pnUser)
+			this.onMappingStored?.({
+				lid: `${lidUser}@lid`,
+				pn: `${pnUser}@s.whatsapp.net`
+			})
 		}
 	}
 

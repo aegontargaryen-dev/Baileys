@@ -47,6 +47,13 @@ const storeMappingFromEnvelope = async (
 		} catch (error) {
 			logger.warn({ sender, senderAlt, error }, 'Failed to store LID mapping')
 		}
+	} else if (senderAlt && isPnUser(senderAlt) && isLidUser(sender)) {
+		try {
+			await repository.lidMapping.storeLIDPNMappings?.([{ lid: sender, pn: senderAlt }])
+			logger.debug({ sender, senderAlt }, 'Stored LID mapping from LID-addressed envelope')
+		} catch (error) {
+			logger.warn({ sender, senderAlt, error }, 'Failed to store LID mapping')
+		}
 	}
 }
 

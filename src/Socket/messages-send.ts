@@ -723,18 +723,34 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 
 			if (isNewsletter) {
 				const patched = patchMessageBeforeSending ? await patchMessageBeforeSending(message, []) : message
-				const bytes = encodeNewsletterMessage(patched as proto.IMessage)
-				binaryNodeContent.push({
-					tag: 'plaintext',
-					attrs: mediaType ? { mediatype: mediaType } : {},
-					content: bytes
-				})
+				const isNewsletterEdit =
+					!!patched.protocolMessage?.editedMessage &&
+					patched.protocolMessage.type === proto.Message.ProtocolMessage.Type.MESSAGE_EDIT
+				const isNewsletterRevoke =
+					patched.protocolMessage?.type === proto.Message.ProtocolMessage.Type.REVOKE
+				const newsletterPayload = isNewsletterEdit ? patched.protocolMessage!.editedMessage! : patched
+				const newsletterMediaType = getMediaType(normalizeMessageContent(newsletterPayload) || newsletterPayload)
+				if (!isNewsletterRevoke) {
+					const bytes = encodeNewsletterMessage(newsletterPayload as proto.IMessage)
+					binaryNodeContent.push({
+						tag: 'plaintext',
+						attrs: newsletterMediaType ? { mediatype: newsletterMediaType } : {},
+						content: bytes
+					})
+				}
+
+				if (additionalNodes?.length) {
+					binaryNodeContent.push(...additionalNodes)
+				}
+
 				const stanza: BinaryNode = {
 					tag: 'message',
 					attrs: {
 						to: jid,
-						id: msgId,
-						type: getMessageType(message),
+						id: (isNewsletterEdit || isNewsletterRevoke ? patched.protocolMessage?.key?.id : undefined) || msgId,
+						type: getMessageType(newsletterPayload),
+						...(isNewsletterEdit ? { edit: '1' } : {}),
+						...(isNewsletterRevoke ? { edit: '8' } : {}),
 						...(additionalAttributes || {})
 					},
 					content: binaryNodeContent

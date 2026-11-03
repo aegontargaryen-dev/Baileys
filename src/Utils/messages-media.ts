@@ -249,7 +249,11 @@ export async function getAudioDuration(buffer: Buffer | string | Readable) {
 export async function getAudioWaveform(buffer: Buffer | string | Readable, logger?: ILogger) {
 	try {
 		// @ts-ignore
-		const { default: decoder } = await import('audio-decode')
+		const audioDecodeMod: any = await import('audio-decode')
+		const decoder =
+			typeof audioDecodeMod === 'function'
+				? audioDecodeMod
+				: audioDecodeMod?.default?.default || audioDecodeMod?.default
 		let audioData: Buffer
 		if (Buffer.isBuffer(buffer)) {
 			audioData = buffer
@@ -264,12 +268,12 @@ export async function getAudioWaveform(buffer: Buffer | string | Readable, logge
 
 		const rawData = audioBuffer.getChannelData(0) // We only need to work with one channel of data
 		const samples = 64 // Number of samples we want to have in our final data set
-		const blockSize = Math.floor(rawData.length / samples) // the number of samples in each subdivision
+		const blockSize = Math.max(1, Math.floor(rawData.length / samples)) // the number of samples in each subdivision
 		const filteredData: number[] = []
 		for (let i = 0; i < samples; i++) {
 			const blockStart = blockSize * i // the location of the first sample in the block
 			let sum = 0
-			for (let j = 0; j < blockSize; j++) {
+			for (let j = 0; j < blockSize && blockStart + j < rawData.length; j++) {
 				sum = sum + Math.abs(rawData[blockStart + j]) // find the sum of all the samples in the block
 			}
 
@@ -277,7 +281,8 @@ export async function getAudioWaveform(buffer: Buffer | string | Readable, logge
 		}
 
 		// This guarantees that the largest data point will be set to 1, and the rest of the data will scale proportionally.
-		const multiplier = Math.pow(Math.max(...filteredData), -1)
+		const maxVal = Math.max(...filteredData)
+		const multiplier = maxVal > 0 ? Math.pow(maxVal, -1) : 0
 		const normalizedData = filteredData.map(n => n * multiplier)
 
 		// Generate waveform like WhatsApp
@@ -546,6 +551,19 @@ export const downloadContentFromMessage = async (
 	const downloadUrl = directPath ? getUrlFromDirectPath(directPath, fallbackHost) : url
 	if (!downloadUrl) {
 		throw new Boom('No valid media URL or directPath present in message', { statusCode: 400 })
+	}
+
+	if (!mediaKey || mediaKey.length === 0) {
+		return getHttpStream(downloadUrl, {
+			...opts.options,
+			headers: {
+				Origin: DEFAULT_ORIGIN,
+				...(opts.options?.headers as Record<string, string>),
+				...(opts.startByte !== undefined || opts.endByte !== undefined
+					? { Range: `bytes=${opts.startByte ?? 0}-${opts.endByte ?? ''}` }
+					: {})
+			}
+		})
 	}
 
 	const keys = await getMediaKeys(mediaKey, type)
@@ -841,11 +859,12 @@ const uploadWithFetch = async ({
  */
 const uploadMedia = async (params: UploadParams, logger?: ILogger): Promise<MediaUploadResult | undefined> => {
 	const hasHttpsAgent = !!params.agent && !isFetchDispatcher(params.agent)
-	if (isNodeRuntime() || hasHttpsAgent) {
+	const hasDispatcher = isFetchDispatcher(params.agent)
+	if ((isNodeRuntime() && !hasDispatcher) || hasHttpsAgent) {
 		logger?.debug({ hasHttpsAgent }, 'Using Node.js https module for upload')
 		return uploadWithNodeHttp(params)
 	} else {
-		logger?.debug('Using web-standard Fetch API for upload')
+		logger?.debug({ hasDispatcher }, 'Using web-standard Fetch API for upload')
 		return uploadWithFetch(params)
 	}
 }

@@ -157,7 +157,7 @@ export const makeChatsSocket = (config: SocketConfig) => {
 
 	const fetchPrivacySettings = async (force = false) => {
 		if (!privacySettings || force) {
-			const { content } = await query({
+			const result = await query({
 				tag: 'iq',
 				attrs: {
 					xmlns: 'privacy',
@@ -166,7 +166,7 @@ export const makeChatsSocket = (config: SocketConfig) => {
 				},
 				content: [{ tag: 'privacy', attrs: {} }]
 			})
-			privacySettings = reduceBinaryNodeToDictionary(content?.[0] as BinaryNode, 'category')
+			privacySettings = reduceBinaryNodeToDictionary(result?.content?.[0] as BinaryNode, 'category')
 		}
 
 		return privacySettings
@@ -321,7 +321,10 @@ export const makeChatsSocket = (config: SocketConfig) => {
 			)
 		}
 
-		if (jidNormalizedUser(jid) !== jidNormalizedUser(authState.creds.me!.id)) {
+		if (
+			jidNormalizedUser(jid) !== jidNormalizedUser(authState.creds.me!.id) &&
+			(!authState.creds.me?.lid || jidNormalizedUser(jid) !== jidNormalizedUser(authState.creds.me.lid))
+		) {
 			targetJid = jidNormalizedUser(jid) // in case it is someone other than us
 		} else {
 			targetJid = undefined
@@ -355,7 +358,10 @@ export const makeChatsSocket = (config: SocketConfig) => {
 			)
 		}
 
-		if (jidNormalizedUser(jid) !== jidNormalizedUser(authState.creds.me!.id)) {
+		if (
+			jidNormalizedUser(jid) !== jidNormalizedUser(authState.creds.me!.id) &&
+			(!authState.creds.me?.lid || jidNormalizedUser(jid) !== jidNormalizedUser(authState.creds.me.lid))
+		) {
 			targetJid = jidNormalizedUser(jid) // in case it is someone other than us
 		} else {
 			targetJid = undefined
