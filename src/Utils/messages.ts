@@ -2,6 +2,7 @@ import { Boom } from '@hapi/boom'
 import { randomBytes } from 'crypto'
 import { promises as fs } from 'fs'
 import { type Transform } from 'stream'
+import { crc32 } from 'zlib'
 import { proto } from '../../WAProto/index.js'
 import {
 	CALL_AUDIO_PREFIX,
@@ -20,6 +21,7 @@ import type {
 	MessageGenerationOptionsFromContent,
 	MessageUserReceipt,
 	MessageWithContextInfo,
+	StickerPack,
 	WAMediaUpload,
 	WAMessage,
 	WAMessageContent,
@@ -37,8 +39,11 @@ import {
 	generateThumbnail,
 	getAudioDuration,
 	getAudioWaveform,
+	getImageProcessingLibrary,
 	getRawMediaUploadData,
-	type MediaDownloadOptions
+	getStream,
+	type MediaDownloadOptions,
+	toBuffer
 } from './messages-media'
 import type { PollContext } from './process-message'
 import { shouldIncludeReportingToken } from './reporting-utils'
@@ -157,7 +162,7 @@ export const prepareWAMessageMedia = async (
 	}
 
 	if (!uploadData.mimetype) {
-		uploadData.mimetype = MIMETYPE_MAP[mediaType]
+		uploadData.mimetype = MIMETYPE_MAP[options.mediaTypeOverride || mediaType]
 	}
 
 	if (cacheableKey) {
@@ -491,6 +496,8 @@ export const generateWAMessageContent = async (
 				}
 			}
 		}
+	} else if ('stickerPack' in message) {
+		m = await prepareStickerPackMessage(message.stickerPack, options)
 	} else if (hasNonNullishProperty(message, 'pin')) {
 		m.pinInChatMessage = {}
 		m.messageContextInfo = {}
@@ -1237,4 +1244,320 @@ export const assertMediaContent = (content: proto.IMessage | null | undefined) =
 	}
 
 	return mediaContent
+}
+
+/**
+ * Checks if a WebP buffer is animated by looking for VP8X chunk with animation flag
+ * or ANIM/ANMF chunks
+ */
+function isAnimatedWebP(buffer: Buffer): boolean {
+	// WebP must start with RIFF....WEBP
+	if (
+		buffer.length < 12 ||
+		buffer[0] !== 0x52 ||
+		buffer[1] !== 0x49 ||
+		buffer[2] !== 0x46 ||
+		buffer[3] !== 0x46 ||
+		buffer[8] !== 0x57 ||
+		buffer[9] !== 0x45 ||
+		buffer[10] !== 0x42 ||
+		buffer[11] !== 0x50
+	) {
+		return false
+	}
+
+	// Parse chunks starting after RIFF header (12 bytes)
+	let offset = 12
+	while (offset < buffer.length - 8) {
+		const chunkFourCC = buffer.toString('ascii', offset, offset + 4)
+		const chunkSize = buffer.readUInt32LE(offset + 4)
+
+		if (chunkFourCC === 'VP8X') {
+			// VP8X extended header, check animation flag (bit 1 at offset+8)
+			const flagsOffset = offset + 8
+			if (flagsOffset < buffer.length) {
+				const flags = buffer[flagsOffset]!
+				if (flags & 0x02) {
+					return true
+				}
+			}
+		} else if (chunkFourCC === 'ANIM' || chunkFourCC === 'ANMF') {
+			// ANIM or ANMF chunks indicate animation
+			return true
+		}
+
+		// Move to next chunk (chunk size + 8 bytes header, padded to even)
+		offset += 8 + chunkSize + (chunkSize % 2)
+	}
+
+	return false
+}
+
+/**
+ * Checks if a buffer is a WebP file
+ */
+function isWebPBuffer(buffer: Buffer): boolean {
+	return (
+		buffer.length >= 12 &&
+		buffer[0] === 0x52 &&
+		buffer[1] === 0x49 &&
+		buffer[2] === 0x46 &&
+		buffer[3] === 0x46 &&
+		buffer[8] === 0x57 &&
+		buffer[9] === 0x45 &&
+		buffer[10] === 0x42 &&
+		buffer[11] === 0x50
+	)
+}
+
+export function createStoredZip(files: Record<string, Uint8Array>): Buffer {
+	const localParts: Buffer[] = []
+	const centralParts: Buffer[] = []
+	let offset = 0
+	const entries = Object.entries(files)
+
+	for (const [name, content] of entries) {
+		const nameBuf = Buffer.from(name, 'utf8')
+		const dataBuf = Buffer.from(content.buffer, content.byteOffset, content.byteLength)
+		const crc = crc32(dataBuf) >>> 0
+		const size = dataBuf.length
+
+		const localHeader = Buffer.alloc(30 + nameBuf.length)
+		localHeader.writeUInt32LE(0x04034b50, 0)
+		localHeader.writeUInt16LE(20, 4)
+		localHeader.writeUInt16LE(0, 6)
+		localHeader.writeUInt16LE(0, 8)
+		localHeader.writeUInt16LE(0, 10)
+		localHeader.writeUInt16LE(0, 12)
+		localHeader.writeUInt32LE(crc, 14)
+		localHeader.writeUInt32LE(size, 18)
+		localHeader.writeUInt32LE(size, 22)
+		localHeader.writeUInt16LE(nameBuf.length, 26)
+		localHeader.writeUInt16LE(0, 28)
+		nameBuf.copy(localHeader, 30)
+
+		const centralHeader = Buffer.alloc(46 + nameBuf.length)
+		centralHeader.writeUInt32LE(0x02014b50, 0)
+		centralHeader.writeUInt16LE(20, 4)
+		centralHeader.writeUInt16LE(20, 6)
+		centralHeader.writeUInt16LE(0, 8)
+		centralHeader.writeUInt16LE(0, 10)
+		centralHeader.writeUInt16LE(0, 12)
+		centralHeader.writeUInt16LE(0, 14)
+		centralHeader.writeUInt32LE(crc, 16)
+		centralHeader.writeUInt32LE(size, 20)
+		centralHeader.writeUInt32LE(size, 24)
+		centralHeader.writeUInt16LE(nameBuf.length, 28)
+		centralHeader.writeUInt16LE(0, 30)
+		centralHeader.writeUInt16LE(0, 32)
+		centralHeader.writeUInt16LE(0, 34)
+		centralHeader.writeUInt16LE(0, 36)
+		centralHeader.writeUInt32LE(0, 38)
+		centralHeader.writeUInt32LE(offset, 42)
+		nameBuf.copy(centralHeader, 46)
+
+		localParts.push(localHeader, dataBuf)
+		centralParts.push(centralHeader)
+		offset += localHeader.length + size
+	}
+
+	const centralDir = Buffer.concat(centralParts)
+	const eocd = Buffer.alloc(22)
+	eocd.writeUInt32LE(0x06054b50, 0)
+	eocd.writeUInt16LE(0, 4)
+	eocd.writeUInt16LE(0, 6)
+	eocd.writeUInt16LE(entries.length, 8)
+	eocd.writeUInt16LE(entries.length, 10)
+	eocd.writeUInt32LE(centralDir.length, 12)
+	eocd.writeUInt32LE(offset, 16)
+	eocd.writeUInt16LE(0, 20)
+
+	return Buffer.concat([...localParts, centralDir, eocd])
+}
+
+export function readStoredZip(zipBuf: Uint8Array): Record<string, Uint8Array> {
+	const buf = Buffer.from(zipBuf.buffer, zipBuf.byteOffset, zipBuf.byteLength)
+	const result: Record<string, Uint8Array> = {}
+	let offset = 0
+	while (offset + 30 <= buf.length && buf.readUInt32LE(offset) === 0x04034b50) {
+		const compressedSize = buf.readUInt32LE(offset + 18)
+		const nameLen = buf.readUInt16LE(offset + 26)
+		const extraLen = buf.readUInt16LE(offset + 28)
+		const nameStart = offset + 30
+		const dataStart = nameStart + nameLen + extraLen
+		const name = buf.toString('utf8', nameStart, nameStart + nameLen)
+		result[name] = new Uint8Array(buf.subarray(dataStart, dataStart + compressedSize))
+		offset = dataStart + compressedSize
+	}
+
+	return result
+}
+
+async function prepareStickerPackMessage(
+	stickerPack: StickerPack,
+	options: MessageContentGenerationOptions
+): Promise<proto.IMessage> {
+	const { stickers, name, publisher, packId, description } = stickerPack
+
+	if (stickers.length > 60) {
+		throw new Boom('Sticker pack exceeds the maximum limit of 60 stickers', { statusCode: 400 })
+	}
+
+	if (stickers.length === 0) {
+		throw new Boom('Sticker pack must contain at least one sticker', { statusCode: 400 })
+	}
+
+	const stickerPackIdValue = packId || generateMessageIDV2()
+
+	const lib = await getImageProcessingLibrary()
+	const stickerData: Record<string, Uint8Array> = {}
+	const stickerPromises = stickers.map(async (s, i) => {
+		const { stream } = await getStream(s.data)
+		const buffer = await toBuffer(stream)
+
+		let webpBuffer: Buffer
+		let isAnimated = false
+		const isWebP = isWebPBuffer(buffer)
+
+		if (isWebP) {
+			// Already WebP - preserve original to keep exif metadata and animation
+			webpBuffer = buffer
+			isAnimated = isAnimatedWebP(buffer)
+		} else if ('sharp' in lib && lib.sharp) {
+			// Convert to WebP, preserving metadata
+			webpBuffer = await lib.sharp.default(buffer).webp().toBuffer()
+			// Non-WebP inputs converted to WebP are not animated
+			isAnimated = false
+		} else {
+			throw new Boom(
+				'No image processing library (sharp) available for converting sticker to WebP. Either install sharp or provide stickers in WebP format.'
+			)
+		}
+
+		if (webpBuffer.length > 1024 * 1024) {
+			throw new Boom(`Sticker at index ${i} exceeds the 1MB size limit`, { statusCode: 400 })
+		}
+
+		const hash = sha256(webpBuffer).toString('base64').replace(/\//g, '-')
+		const fileName = `${hash}.webp`
+		stickerData[fileName] = new Uint8Array(webpBuffer)
+		return {
+			fileName,
+			mimetype: 'image/webp',
+			isAnimated,
+			emojis: s.emojis || [],
+			accessibilityLabel: s.accessibilityLabel
+		}
+	})
+
+	const stickerMetadata = await Promise.all(stickerPromises)
+
+	// Process and add cover/tray icon to the ZIP
+	const trayIconFileName = `${stickerPackIdValue}.webp`
+	const { stream: coverStream } = await getStream(stickerPack.cover)
+	const coverBuffer = await toBuffer(coverStream)
+
+	let coverWebpBuffer: Buffer
+	const isCoverWebP = isWebPBuffer(coverBuffer)
+
+	if (isCoverWebP) {
+		// Already WebP - preserve original to keep exif metadata
+		coverWebpBuffer = coverBuffer
+	} else if ('sharp' in lib && lib.sharp) {
+		coverWebpBuffer = await lib.sharp.default(coverBuffer).webp().toBuffer()
+	} else {
+		throw new Boom(
+			'No image processing library (sharp) available for converting cover to WebP. Either install sharp or provide cover in WebP format.'
+		)
+	}
+
+	// Add cover to ZIP data
+	stickerData[trayIconFileName] = new Uint8Array(coverWebpBuffer)
+
+	const zipBuffer = createStoredZip(stickerData)
+
+	const stickerPackSize = zipBuffer.length
+
+	const stickerPackUpload = await encryptedStream(zipBuffer, 'sticker-pack', {
+		logger: options.logger,
+		opts: options.options
+	})
+
+	let stickerPackUploadResult: Awaited<ReturnType<typeof options.upload>>
+	try {
+		stickerPackUploadResult = await options.upload(stickerPackUpload.encFilePath, {
+			fileEncSha256B64: stickerPackUpload.fileEncSha256.toString('base64'),
+			mediaType: 'sticker-pack',
+			timeoutMs: options.mediaUploadTimeoutMs
+		})
+	} finally {
+		await fs.unlink(stickerPackUpload.encFilePath).catch(() => {})
+	}
+
+	const stickerPackMessage: proto.Message.IStickerPackMessage = {
+		name: name,
+		publisher: publisher,
+		stickerPackId: stickerPackIdValue,
+		packDescription: description,
+		stickerPackOrigin: WAProto.Message.StickerPackMessage.StickerPackOrigin.USER_CREATED,
+		stickerPackSize: stickerPackSize,
+		stickers: stickerMetadata,
+
+		fileSha256: stickerPackUpload.fileSha256,
+		fileEncSha256: stickerPackUpload.fileEncSha256,
+		mediaKey: stickerPackUpload.mediaKey,
+		directPath: stickerPackUploadResult.directPath,
+		fileLength: stickerPackUpload.fileLength,
+		mediaKeyTimestamp: unixTimestampSeconds(),
+
+		trayIconFileName: trayIconFileName
+	}
+
+	try {
+		// Reuse the cover buffer we already processed for thumbnail generation
+		let thumbnailBuffer: Buffer
+
+		if ('sharp' in lib && lib.sharp) {
+			thumbnailBuffer = await lib.sharp.default(coverBuffer).resize(252, 252).jpeg().toBuffer()
+		} else if ('jimp' in lib && lib.jimp) {
+			const jimpImage = await lib.jimp.Jimp.read(coverBuffer)
+			thumbnailBuffer = await jimpImage.resize({ w: 252, h: 252 }).getBuffer('image/jpeg')
+		} else {
+			throw new Error('No image processing library available for thumbnail generation')
+		}
+
+		if (!thumbnailBuffer || thumbnailBuffer.length === 0) {
+			throw new Error('Failed to generate thumbnail buffer')
+		}
+
+		const thumbUpload = await encryptedStream(thumbnailBuffer, 'thumbnail-sticker-pack', {
+			logger: options.logger,
+			opts: options.options,
+			mediaKey: stickerPackUpload.mediaKey // Use same mediaKey as the sticker pack ZIP
+		})
+
+		let thumbUploadResult: Awaited<ReturnType<typeof options.upload>>
+		try {
+			thumbUploadResult = await options.upload(thumbUpload.encFilePath, {
+				fileEncSha256B64: thumbUpload.fileEncSha256.toString('base64'),
+				mediaType: 'thumbnail-sticker-pack',
+				timeoutMs: options.mediaUploadTimeoutMs
+			})
+		} finally {
+			await fs.unlink(thumbUpload.encFilePath).catch(() => {})
+		}
+
+		Object.assign(stickerPackMessage, {
+			thumbnailDirectPath: thumbUploadResult.directPath,
+			thumbnailSha256: thumbUpload.fileSha256,
+			thumbnailEncSha256: thumbUpload.fileEncSha256,
+			thumbnailHeight: 252,
+			thumbnailWidth: 252,
+			imageDataHash: sha256(thumbnailBuffer).toString('base64')
+		})
+	} catch (e) {
+		options.logger?.warn?.(`Thumbnail generation failed: ${e}`)
+	}
+
+	return { stickerPackMessage }
 }
