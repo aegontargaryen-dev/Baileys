@@ -435,6 +435,15 @@ export const makeCommunitiesSocket = (config: SocketConfig) => {
 export const extractCommunityMetadata = (result: BinaryNode) => {
 	const community = getBinaryNodeChild(result, 'community') || getBinaryNodeChild(result, 'group')
 	if (!community) {
+		const errorNode = getBinaryNodeChild(result, 'error')
+		if (errorNode) {
+			const code = Number(errorNode.attrs.code)
+			throw new Boom(errorNode.attrs.text || 'Community metadata error', {
+				statusCode: Number.isNaN(code) ? undefined : code,
+				data: result
+			})
+		}
+
 		throw new Boom('Invalid community metadata response: missing <community> or <group> node', { data: result })
 	}
 
@@ -478,7 +487,8 @@ export const extractCommunityMetadata = (result: BinaryNode) => {
 			}
 		}),
 		ephemeralDuration: eph ? +eph : undefined,
-		addressingMode: getBinaryNodeChildString(community, 'addressing_mode')! as GroupMetadata['addressingMode']
+		addressingMode: (community.attrs.addressing_mode ||
+			getBinaryNodeChildString(community, 'addressing_mode')) as GroupMetadata['addressingMode']
 	}
 	return metadata
 }

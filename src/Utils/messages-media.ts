@@ -304,11 +304,14 @@ export const toReadable = (buffer: Buffer) => {
 
 export const toBuffer = async (stream: Readable) => {
 	const chunks: Buffer[] = []
-	for await (const chunk of stream) {
-		chunks.push(chunk)
+	try {
+		for await (const chunk of stream) {
+			chunks.push(chunk)
+		}
+	} finally {
+		stream.destroy()
 	}
 
-	stream.destroy()
 	return Buffer.concat(chunks)
 }
 
@@ -644,6 +647,10 @@ export const downloadEncryptedContent = async (
 			remainingBytes = data.slice(decryptLength)
 			data = data.slice(0, decryptLength)
 
+			if (!data.length) {
+				return callback()
+			}
+
 			if (!aes) {
 				let ivValue = iv
 				if (firstBlockIsIV) {
@@ -668,7 +675,10 @@ export const downloadEncryptedContent = async (
 		},
 		final(callback) {
 			try {
-				pushBytes(aes.final(), b => this.push(b))
+				if (aes) {
+					pushBytes(aes.final(), b => this.push(b))
+				}
+
 				callback()
 			} catch (error: any) {
 				callback(error)
@@ -747,6 +757,7 @@ export const uploadWithNodeHttp = async (
 	const fileSize = fileStats.size
 
 	return new Promise((resolve, reject) => {
+		const stream = createReadStream(filePath)
 		const req = httpModule.request(
 			{
 				hostname: parsedUrl.hostname,
@@ -763,6 +774,7 @@ export const uploadWithNodeHttp = async (
 			res => {
 				// Handle redirects (3xx)
 				if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+					stream.destroy()
 					res.resume() // Consume response to free resources
 					const newUrl = new URL(res.headers.location, url).toString()
 					resolve(
@@ -783,6 +795,7 @@ export const uploadWithNodeHttp = async (
 				let body = ''
 				res.on('data', chunk => (body += chunk))
 				res.on('end', () => {
+					stream.destroy()
 					try {
 						resolve(JSON.parse(body))
 					} catch {
@@ -792,13 +805,16 @@ export const uploadWithNodeHttp = async (
 			}
 		)
 
-		req.on('error', reject)
+		req.on('error', err => {
+			stream.destroy()
+			reject(err)
+		})
 		req.on('timeout', () => {
+			stream.destroy()
 			req.destroy()
 			reject(new Error('Upload timeout'))
 		})
 
-		const stream = createReadStream(filePath)
 		stream.pipe(req)
 		stream.on('error', err => {
 			req.destroy()
@@ -823,19 +839,23 @@ const uploadWithFetch = async ({
 	const webStream = Readable.toWeb(nodeStream) as ReadableStream
 	const dispatcher = isFetchDispatcher(agent) ? agent : undefined
 
-	const response = await fetch(url, {
-		...(dispatcher ? { dispatcher } : {}),
-		method: 'POST',
-		body: webStream,
-		headers,
-		duplex: 'half',
-		signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined
-	})
-
 	try {
-		return (await response.json()) as MediaUploadResult
-	} catch {
-		return undefined
+		const response = await fetch(url, {
+			...(dispatcher ? { dispatcher } : {}),
+			method: 'POST',
+			body: webStream,
+			headers,
+			duplex: 'half',
+			signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined
+		})
+
+		try {
+			return (await response.json()) as MediaUploadResult
+		} catch {
+			return undefined
+		}
+	} finally {
+		nodeStream.destroy()
 	}
 }
 
@@ -948,7 +968,7 @@ export const getWAUploadToServer = (
 					throw new Error(`upload failed, reason: ${JSON.stringify(result)}`)
 				}
 			} catch (error: any) {
-				const isLast = hostname === hosts[uploadInfo.hosts.length - 1]?.hostname
+				const isLast = hostname === hosts[hosts.length - 1]?.hostname
 				logger.warn(
 					{ trace: error?.stack, uploadResult: result },
 					`Error in uploading to ${hostname} ${isLast ? '' : ', retrying...'}`

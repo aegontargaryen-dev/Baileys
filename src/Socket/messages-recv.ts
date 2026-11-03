@@ -1560,11 +1560,9 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 
 	const handleReceipt = async (node: BinaryNode) => {
 		const { attrs, content } = node
-		const isLid = attrs.from!.includes('lid')
-		const isNodeFromMe = areJidsSameUser(
-			attrs.participant || attrs.from,
-			isLid ? authState.creds.me?.lid : authState.creds.me?.id
-		)
+		const senderJid = attrs.participant || attrs.from!
+		const isLid = senderJid.includes('lid')
+		const isNodeFromMe = areJidsSameUser(senderJid, isLid ? authState.creds.me?.lid : authState.creds.me?.id)
 		const remoteJid = !isNodeFromMe || isJidGroup(attrs.from) ? attrs.from : attrs.recipient
 		const fromMe = !attrs.recipient || ((attrs.type === 'retry' || attrs.type === 'sender') && isNodeFromMe)
 
@@ -1648,7 +1646,6 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 						if (ids[0] && key.participant && (await willSendMessageAgain(ids[0], key.participant))) {
 							if (key.fromMe) {
 								try {
-									await updateSendMessageAgainCount(ids[0], key.participant)
 									logger.debug({ attrs, key }, 'recv retry request')
 									await sendMessagesAgain(key, ids, retryNode!, node)
 								} catch (error: unknown) {
@@ -1679,7 +1676,10 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 				notificationMutex.mutex(async () => {
 					const msg = await processNotification(node)
 					if (msg) {
-						const fromMe = areJidsSameUser(node.attrs.participant || remoteJid, authState.creds.me!.id)
+						const notifSender = node.attrs.participant || remoteJid
+						const fromMe =
+							areJidsSameUser(notifSender, authState.creds.me!.id) ||
+							(!!authState.creds.me?.lid && areJidsSameUser(notifSender, authState.creds.me.lid))
 						const { senderAlt: participantAlt, addressingMode } = extractAddressingContext(node)
 						msg.key = {
 							remoteJid,
@@ -1763,11 +1763,6 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 
 				// message failed to decrypt
 				if (msg.messageStubType === proto.WebMessageInfo.StubType.CIPHERTEXT && msg.category !== 'peer') {
-					if (msg?.messageStubParameters?.[0] === MISSING_KEYS_ERROR_TEXT) {
-						acked = true
-						return sendMessageAck(node, NACK_REASONS.ParsingError)
-					}
-
 					// A bot reply is not Signal-encrypted, so a retry receipt cannot help
 					if (isBotReply) {
 						logger.debug({ key: msg.key, reason: msg.messageStubParameters?.[0] }, 'failed to decrypt bot reply')

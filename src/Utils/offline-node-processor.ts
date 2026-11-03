@@ -39,30 +39,32 @@ export function makeOfflineNodeProcessor(
 		isProcessing = true
 
 		const promise = async () => {
-			let processedInBatch = 0
+			try {
+				let processedInBatch = 0
 
-			while (nodes.length && deps.isWsOpen()) {
-				const { type, node } = nodes.shift()!
+				while (nodes.length && deps.isWsOpen()) {
+					const { type, node } = nodes.shift()!
 
-				const nodeProcessor = nodeProcessorMap.get(type)
+					const nodeProcessor = nodeProcessorMap.get(type)
 
-				if (!nodeProcessor) {
-					deps.onUnexpectedError(new Error(`unknown offline node type: ${type}`), 'processing offline node')
-					continue
+					if (!nodeProcessor) {
+						deps.onUnexpectedError(new Error(`unknown offline node type: ${type}`), 'processing offline node')
+						continue
+					}
+
+					await nodeProcessor(node).catch(err => deps.onUnexpectedError(err, `processing offline ${type}`))
+					processedInBatch++
+
+					// Yield to event loop after processing a batch
+					// This prevents blocking the event loop for too long when there are many offline nodes
+					if (processedInBatch >= batchSize) {
+						processedInBatch = 0
+						await deps.yieldToEventLoop()
+					}
 				}
-
-				await nodeProcessor(node).catch(err => deps.onUnexpectedError(err, `processing offline ${type}`))
-				processedInBatch++
-
-				// Yield to event loop after processing a batch
-				// This prevents blocking the event loop for too long when there are many offline nodes
-				if (processedInBatch >= batchSize) {
-					processedInBatch = 0
-					await deps.yieldToEventLoop()
-				}
+			} finally {
+				isProcessing = false
 			}
-
-			isProcessing = false
 		}
 
 		promise().catch(error => deps.onUnexpectedError(error, 'processing offline nodes'))

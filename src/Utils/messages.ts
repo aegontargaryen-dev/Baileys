@@ -149,20 +149,23 @@ export const prepareWAMessageMedia = async (
 		media: (message as any)[mediaType]
 	}
 	delete (uploadData as any)[mediaType]
+	const isNewsletter = !!options.jid && isJidNewsletter(options.jid)
+	const isPtv = 'ptv' in uploadData && !!uploadData.ptv
 	// check if cacheable + generate cache key
 	const cacheableKey =
 		typeof uploadData.media === 'object' &&
 		'url' in uploadData.media &&
 		!!uploadData.media.url &&
 		!!options.mediaCache &&
-		mediaType + ':' + uploadData.media.url.toString()
+		`${isNewsletter ? 'newsletter:' : ''}${isPtv ? 'ptv' : mediaType}:${uploadData.media.url.toString()}`
 
 	if (mediaType === 'document' && !uploadData.fileName) {
 		uploadData.fileName = 'file'
 	}
 
 	if (!uploadData.mimetype) {
-		uploadData.mimetype = MIMETYPE_MAP[options.mediaTypeOverride || mediaType]
+		uploadData.mimetype =
+			(options.mediaTypeOverride ? MIMETYPE_MAP[options.mediaTypeOverride] : undefined) || MIMETYPE_MAP[mediaType]
 	}
 
 	if (cacheableKey) {
@@ -171,7 +174,7 @@ export const prepareWAMessageMedia = async (
 			logger?.debug({ cacheableKey }, 'got media cache hit')
 
 			const obj = proto.Message.decode(mediaBuff)
-			const key = `${mediaType}Message`
+			const key = isPtv ? 'ptvMessage' : `${mediaType}Message`
 
 			Object.assign(obj[key as keyof proto.Message]!, { ...uploadData, media: undefined })
 
@@ -179,7 +182,6 @@ export const prepareWAMessageMedia = async (
 		}
 	}
 
-	const isNewsletter = !!options.jid && isJidNewsletter(options.jid)
 	if (isNewsletter) {
 		logger?.info({ key: cacheableKey }, 'Preparing raw media for newsletter')
 		const { filePath, fileSha256, fileLength } = await getRawMediaUploadData(
@@ -196,14 +198,19 @@ export const prepareWAMessageMedia = async (
 				: uploadData.ptv
 					? 'ptv'
 					: mediaType
-		const { directPath, thumbnailDirectPath, thumbnailSha256 } = await options.upload(filePath, {
-			fileEncSha256B64: fileSha256B64,
-			mediaType: newsletterMediaType,
-			timeoutMs: options.mediaUploadTimeoutMs,
-			newsletter: true
-		})
-
-		await fs.unlink(filePath)
+		let directPath: string
+		let thumbnailDirectPath: string | undefined
+		let thumbnailSha256: string | undefined
+		try {
+			;({ directPath, thumbnailDirectPath, thumbnailSha256 } = await options.upload(filePath, {
+				fileEncSha256B64: fileSha256B64,
+				mediaType: newsletterMediaType,
+				timeoutMs: options.mediaUploadTimeoutMs,
+				newsletter: true
+			}))
+		} finally {
+			await fs.unlink(filePath).catch(() => {})
+		}
 
 		const obj = WAProto.Message.fromObject({
 			// todo: add more support here
@@ -507,7 +514,7 @@ export const generateWAMessageContent = async (
 				}
 			}
 		}
-	} else if ('stickerPack' in message) {
+	} else if (hasNonNullishProperty(message, 'stickerPack')) {
 		m = await prepareStickerPackMessage(message.stickerPack, options)
 	} else if (hasNonNullishProperty(message, 'pin')) {
 		m.pinInChatMessage = {}
@@ -1273,6 +1280,7 @@ export const assertMediaContent = (content: proto.IMessage | null | undefined) =
 		content?.documentMessage ||
 		content?.imageMessage ||
 		content?.videoMessage ||
+		content?.ptvMessage ||
 		content?.audioMessage ||
 		content?.stickerMessage ||
 		content?.stickerPackMessage

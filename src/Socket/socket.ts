@@ -655,6 +655,7 @@ export const makeSocket = (config: SocketConfig) => {
 		pendingPairingResolve = undefined
 		pendingPairingReject = undefined
 
+		ws.emit('close')
 		ws.removeAllListeners('close')
 		ws.removeAllListeners('open')
 		ws.removeAllListeners('message')
@@ -992,6 +993,7 @@ export const makeSocket = (config: SocketConfig) => {
 			qrMs = qrTimeout || 20_000 // shorter subsequent qrs
 		}
 
+		clearTimeout(qrTimer)
 		genPairQR()
 	})
 	// the server retiring an unpaired companion's registration material
@@ -1121,7 +1123,11 @@ export const makeSocket = (config: SocketConfig) => {
 
 	let didStartBuffer = false
 	process.nextTick(() => {
-		if (creds.me?.id) {
+		if (closed) {
+			return
+		}
+
+		if (creds.me?.id && (!creds.pairingCode || creds.registered)) {
 			// start buffering important events
 			// if we're logged in
 			ev.buffer()

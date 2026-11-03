@@ -133,10 +133,25 @@ describe('PN to LID Resolution (Issues #2683, #2698, #2688)', () => {
 		}
 	})
 
+	let activeSockets: ReturnType<typeof makeMessagesSocket>[] = []
+	const createTestSocket = () => {
+		const sock = makeMessagesSocket(config as unknown as SocketConfig)
+		activeSockets.push(sock)
+		return sock
+	}
+
+	afterEach(async () => {
+		for (const sock of activeSockets) {
+			await sock.end(undefined)
+		}
+
+		activeSockets = []
+	})
+
 	it('should keep destination JID unchanged for PN when no mapped LID exists', async () => {
 		mockLidMapping.getLIDForPN.mockResolvedValue(null)
 
-		const sock = makeMessagesSocket(config as unknown as SocketConfig)
+		const sock = createTestSocket()
 
 		await sock.sendMessage('12345@s.whatsapp.net', { text: 'test' })
 
@@ -146,7 +161,7 @@ describe('PN to LID Resolution (Issues #2683, #2698, #2688)', () => {
 	it('should resolve destination JID to mapped LID when mapping exists', async () => {
 		mockLidMapping.getLIDForPN.mockResolvedValue('98765@lid')
 
-		const sock = makeMessagesSocket(config as unknown as SocketConfig)
+		const sock = createTestSocket()
 
 		await sock.sendMessage('12345@s.whatsapp.net', { text: 'test' })
 
@@ -154,7 +169,7 @@ describe('PN to LID Resolution (Issues #2683, #2698, #2688)', () => {
 	})
 
 	it('should keep destination JID unchanged when sending directly to LID', async () => {
-		const sock = makeMessagesSocket(config as unknown as SocketConfig)
+		const sock = createTestSocket()
 
 		await sock.sendMessage('98765@lid', { text: 'test' })
 
@@ -162,7 +177,7 @@ describe('PN to LID Resolution (Issues #2683, #2698, #2688)', () => {
 	})
 
 	it('should keep destination JID unchanged for groups', async () => {
-		const sock = makeMessagesSocket(config as unknown as SocketConfig)
+		const sock = createTestSocket()
 
 		sock.groupMetadata = jest.fn<any>().mockResolvedValue({
 			id: '12345-group@g.us',
@@ -177,7 +192,7 @@ describe('PN to LID Resolution (Issues #2683, #2698, #2688)', () => {
 	it('should gracefully fallback to original JID if getLIDForPN throws an error', async () => {
 		mockLidMapping.getLIDForPN.mockRejectedValue(new Error('Database disconnect'))
 
-		const sock = makeMessagesSocket(config as unknown as SocketConfig)
+		const sock = createTestSocket()
 
 		await sock.sendMessage('12345@s.whatsapp.net', { text: 'test' })
 
@@ -185,7 +200,7 @@ describe('PN to LID Resolution (Issues #2683, #2698, #2688)', () => {
 	})
 
 	it('should keep destination JID unchanged and not query mapping for newsletters', async () => {
-		const sock = makeMessagesSocket(config as unknown as SocketConfig)
+		const sock = createTestSocket()
 
 		await sock.sendMessage('120363234@newsletter', { text: 'test' })
 
@@ -193,7 +208,7 @@ describe('PN to LID Resolution (Issues #2683, #2698, #2688)', () => {
 	})
 
 	it('should keep destination JID unchanged and not query mapping for status broadcast', async () => {
-		const sock = makeMessagesSocket(config as unknown as SocketConfig)
+		const sock = createTestSocket()
 
 		await sock.sendMessage('status@broadcast', { text: 'test' })
 
@@ -201,7 +216,7 @@ describe('PN to LID Resolution (Issues #2683, #2698, #2688)', () => {
 	})
 
 	it('should handle malformed/invalid JIDs gracefully without throwing or querying mapping', async () => {
-		const sock = makeMessagesSocket(config as unknown as SocketConfig)
+		const sock = createTestSocket()
 
 		await sock.sendMessage('invalid-jid@invalid-domain', { text: 'test' })
 

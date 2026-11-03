@@ -101,6 +101,7 @@ const withSocket = async (
 		// let the socket's startup tasks settle first, or end() leaves the event buffer timer running
 		await new Promise(resolve => setTimeout(resolve, 50))
 		await sock.end(undefined)
+		userDevicesCache.close()
 	}
 }
 

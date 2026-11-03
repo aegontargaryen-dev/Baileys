@@ -54,6 +54,10 @@ describe('Identity Change Handling', () => {
 		mockMeLid = 'mylid@lid'
 	})
 
+	afterEach(() => {
+		identityAssertDebounce.close()
+	})
+
 	describe('Core Checks', () => {
 		it('should skip companion devices (device > 0)', async () => {
 			const node = createIdentityChangeNode('user:5@s.whatsapp.net')

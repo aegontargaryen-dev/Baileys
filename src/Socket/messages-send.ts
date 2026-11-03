@@ -407,8 +407,12 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 
 				// Process all devices for this user
 				for (const item of userDevices) {
+					if (isLidUser && item.server === 'hosted') {
+						item.server = 'hosted.lid'
+					}
+
 					const finalJid = isLidUser
-						? jidEncode(user, item.server === 'hosted' ? 'hosted.lid' : item.server, item.device)
+						? jidEncode(user, item.server, item.device)
 						: jidEncode(item.user, item.server, item.device)
 
 					deviceResults.push({
@@ -685,7 +689,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 			try {
 				const mappedLid = await getLIDForPN(jid)
 				if (mappedLid) {
-					jid = mappedLid
+					jid = jidNormalizedUser(mappedLid)
 				}
 			} catch (error: any) {
 				logger.debug({ jid, err: error?.message }, 'failed to check LID mapping for PN')

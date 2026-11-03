@@ -24,6 +24,13 @@ const getFileLock = (path: string): Mutex => {
 	return mutex
 }
 
+const releaseFileLock = (path: string, mutex: Mutex, release: () => void) => {
+	release()
+	if (!mutex.isLocked() && fileLocks.get(path) === mutex) {
+		fileLocks.delete(path)
+	}
+}
+
 // On Windows, rename fails with EPERM/EACCES/EBUSY while another process (antivirus, backup,
 // a reader outside this mutex) has the target open. The lock is short-lived, so retry briefly.
 // Elsewhere those codes mean a real permission problem, so fail on the first attempt.
@@ -74,7 +81,7 @@ export const useMultiFileAuthState = async (
 				await unlink(tmpPath).catch(() => {})
 				throw error
 			} finally {
-				release()
+				releaseFileLock(filePath, mutex, release)
 			}
 		})
 	}
@@ -89,7 +96,7 @@ export const useMultiFileAuthState = async (
 					const data = await readFile(filePath, { encoding: 'utf-8' })
 					return JSON.parse(data, BufferJSON.reviver)
 				} finally {
-					release()
+					releaseFileLock(filePath, mutex, release)
 				}
 			})
 		} catch (error) {
@@ -107,7 +114,7 @@ export const useMultiFileAuthState = async (
 					await unlink(filePath)
 				} catch {
 				} finally {
-					release()
+					releaseFileLock(filePath, mutex, release)
 				}
 			})
 		} catch {}

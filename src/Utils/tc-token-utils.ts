@@ -94,11 +94,12 @@ export async function resolveTcTokenJid(
 	getLIDForPN: (pn: string) => Promise<string | null>,
 	logger?: ILogger
 ): Promise<string> {
+	jid = jidNormalizedUser(jid)
 	if (isLidUser(jid)) return jid
 	if (!isPnUser(jid)) return jid
 	try {
 		const lid = await getLIDForPN(jid)
-		return lid ?? jid
+		return lid ? jidNormalizedUser(lid) : jid
 	} catch (error: any) {
 		logger?.debug({ jid, err: error?.message }, 'failed to resolve TcToken JID')
 		return jid
@@ -113,12 +114,13 @@ export async function resolveIssuanceJid(
 	getPNForLID?: (lid: string) => Promise<string | null>,
 	logger?: ILogger
 ): Promise<string> {
+	jid = jidNormalizedUser(jid)
 	if (issueToLid) {
 		if (isLidUser(jid)) return jid
 		if (!isPnUser(jid)) return jid
 		try {
 			const lid = await getLIDForPN(jid)
-			return lid ?? jid
+			return lid ? jidNormalizedUser(lid) : jid
 		} catch (error: any) {
 			logger?.debug({ jid, err: error?.message }, 'failed to resolve Issuance LID JID')
 			return jid
@@ -129,7 +131,7 @@ export async function resolveIssuanceJid(
 	if (getPNForLID) {
 		try {
 			const pn = await getPNForLID(jid)
-			return pn ?? jid
+			return pn ? jidNormalizedUser(pn) : jid
 		} catch (error: any) {
 			logger?.debug({ jid, err: error?.message }, 'failed to resolve Issuance PN JID')
 			return jid

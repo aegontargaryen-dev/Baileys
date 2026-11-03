@@ -211,21 +211,12 @@ export const makeEventBuffer = (logger: ILogger): BaileysBufferableEventEmitter 
 				buffer()
 				try {
 					const result = await work(...args)
-					// If this is the only buffer, flush after a small delay
-					if (bufferCount === 1) {
-						setTimeout(() => {
-							if (isBuffering && bufferCount === 1) {
-								flush()
-							}
-						}, 100) // Small delay to allow nested buffers
-					}
-
 					return result
 				} catch (error) {
 					throw error
 				} finally {
 					bufferCount = Math.max(0, bufferCount - 1)
-					if (bufferCount === 0) {
+					if (isBuffering && bufferCount === 0) {
 						// Only schedule ONE timeout, not 10,000
 						if (!flushPendingTimeout) {
 							flushPendingTimeout = setTimeout(flush, 100)
@@ -425,7 +416,8 @@ function append<E extends BufferableEvent>(
 					}
 				} else if (conditionMatches === undefined) {
 					// condition yet to be fulfilled
-					data.chatUpdates[chatId] = update
+					const chatUpdate = data.chatUpdates[chatId] || {}
+					data.chatUpdates[chatId] = mergeChatUpdates(chatUpdate, update)
 				}
 				// otherwise -- condition not met, update is invalid
 
@@ -619,9 +611,7 @@ function append<E extends BufferableEvent>(
 			for (const update of groupUpdates) {
 				const id = update.id!
 				const groupUpdate = data.groupUpdates[id] || {}
-				if (!data.groupUpdates[id]) {
-					data.groupUpdates[id] = Object.assign(groupUpdate, update)
-				}
+				data.groupUpdates[id] = Object.assign(groupUpdate, update)
 			}
 
 			break

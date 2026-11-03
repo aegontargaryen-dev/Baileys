@@ -91,7 +91,7 @@ async function storeTcTokensFromHistorySync(
 	const entries: Record<string, { token: Buffer; timestamp?: string; senderTimestamp?: number }> = {}
 
 	for (const c of candidates) {
-		const existingEntry = existing[c.storageJid]
+		const existingEntry = entries[c.storageJid] ?? existing[c.storageJid]
 		const existingTs = existingEntry?.timestamp ? Number(existingEntry.timestamp) : 0
 		if (existingTs > 0 && existingTs >= c.ts) {
 			continue
@@ -282,7 +282,8 @@ async function decryptPollUpdateVote({
 	signalRepository: SignalRepositoryWithLIDStore
 	logger?: ILogger
 }) {
-	const pollEncKey = pollMsg.messageContextInfo?.messageSecret
+	const pollEncKey =
+		pollMsg.messageContextInfo?.messageSecret || normalizeMessageContent(pollMsg)?.messageContextInfo?.messageSecret
 	if (!pollEncKey) {
 		throw new Boom('Poll creation message is missing messageSecret for vote decryption')
 	}
@@ -297,7 +298,9 @@ async function decryptPollUpdateVote({
 		creationMsgKey.participant,
 		creationMsgKey.participantAlt,
 		!isJidGroup(creationMsgKey.remoteJid || undefined) ? creationMsgKey.remoteJid : undefined,
-		creationMsgKey.remoteJidAlt
+		creationMsgKey.remoteJidAlt,
+		meIdNormalised,
+		meLidNormalised
 	].filter((j): j is string => !!j)
 
 	const creatorCandidates = new Set<string>(rawCreatorCandidates.map(j => jidNormalizedUser(j)))
@@ -695,7 +698,9 @@ const processMessage = async (
 				)
 
 				const responderJid = getKeyAuthor(message.key, meIdNormalised)
-				const eventEncKey = eventMsg?.messageContextInfo?.messageSecret
+				const eventEncKey =
+					eventMsg?.messageContextInfo?.messageSecret ||
+					normalizeMessageContent(eventMsg)?.messageContextInfo?.messageSecret
 
 				if (!eventEncKey) {
 					logger?.warn({ creationMsgKey }, 'event response: missing messageSecret for decryption')
@@ -798,16 +803,22 @@ const processMessage = async (
 			})
 		}
 
-		const participantsIncludesMe = () => participants.find(jid => areJidsSameUser(meId, jid.phoneNumber)) // ADD SUPPORT FOR LID
+		const meLid = creds.me?.lid
+		const participantsIncludesMe = () =>
+			participants.find(
+				jid =>
+					areJidsSameUser(meId, jid.phoneNumber || jid.id) ||
+					(!!meLid && (areJidsSameUser(meLid, jid.id) || areJidsSameUser(meLid, jid.lid)))
+			)
 
 		switch (message.messageStubType) {
 			case WAMessageStubType.GROUP_PARTICIPANT_CHANGE_NUMBER:
-				participants = message.messageStubParameters.map(parseStubParticipant) || []
+				participants = message.messageStubParameters?.map(parseStubParticipant) || []
 				emitParticipantsUpdate('modify')
 				break
 			case WAMessageStubType.GROUP_PARTICIPANT_LEAVE:
 			case WAMessageStubType.GROUP_PARTICIPANT_REMOVE:
-				participants = message.messageStubParameters.map(parseStubParticipant) || []
+				participants = message.messageStubParameters?.map(parseStubParticipant) || []
 				emitParticipantsUpdate('remove')
 				// mark the chat read only if you left the group
 				if (participantsIncludesMe()) {
@@ -818,7 +829,7 @@ const processMessage = async (
 			case WAMessageStubType.GROUP_PARTICIPANT_ADD:
 			case WAMessageStubType.GROUP_PARTICIPANT_INVITE:
 			case WAMessageStubType.GROUP_PARTICIPANT_ADD_REQUEST_JOIN:
-				participants = message.messageStubParameters.map(parseStubParticipant) || []
+				participants = message.messageStubParameters?.map(parseStubParticipant) || []
 				if (participantsIncludesMe()) {
 					chat.readOnly = false
 				}
@@ -826,11 +837,11 @@ const processMessage = async (
 				emitParticipantsUpdate('add')
 				break
 			case WAMessageStubType.GROUP_PARTICIPANT_DEMOTE:
-				participants = message.messageStubParameters.map(parseStubParticipant) || []
+				participants = message.messageStubParameters?.map(parseStubParticipant) || []
 				emitParticipantsUpdate('demote')
 				break
 			case WAMessageStubType.GROUP_PARTICIPANT_PROMOTE:
-				participants = message.messageStubParameters.map(parseStubParticipant) || []
+				participants = message.messageStubParameters?.map(parseStubParticipant) || []
 				emitParticipantsUpdate('promote')
 				break
 			case WAMessageStubType.GROUP_CHANGE_ANNOUNCE:
@@ -882,7 +893,8 @@ const processMessage = async (
 					messageKey: message.key,
 					meId,
 					meLid: creds.me?.lid,
-					signalRepository
+					signalRepository,
+					logger
 				})
 
 				ev.emit('messages.update', [

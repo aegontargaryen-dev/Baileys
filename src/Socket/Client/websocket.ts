@@ -12,7 +12,7 @@ export class WebSocketClient extends AbstractSocketClient {
 		return this.socket === null || this.socket?.readyState === WebSocket.CLOSED
 	}
 	get isClosing(): boolean {
-		return this.socket === null || this.socket?.readyState === WebSocket.CLOSING
+		return this.socket?.readyState === WebSocket.CLOSING
 	}
 	get isConnecting(): boolean {
 		return this.socket?.readyState === WebSocket.CONNECTING
