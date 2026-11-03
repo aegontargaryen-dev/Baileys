@@ -38,6 +38,7 @@ import type { ILogger } from './logger'
 const getTmpFilesDirectory = () => tmpdir()
 
 export const getImageProcessingLibrary = async () => {
+	//@ts-ignore
 	const [jimp, sharp] = await Promise.all([import('jimp').catch(() => {}), import('sharp').catch(() => {})])
 
 	if (sharp) {

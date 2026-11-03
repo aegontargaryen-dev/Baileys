@@ -853,8 +853,7 @@ export const normalizeMessageContent = (content: WAMessageContent | null | undef
 			message?.lottieStickerMessage ||
 			message?.groupMentionedMessage ||
 			message?.botInvokeMessage ||
-			message?.commentMessage ||
-			message?.bcallMessage
+			message?.commentMessage
 		)
 	}
 }
@@ -1538,8 +1537,13 @@ async function prepareStickerPackMessage(
 		if ('sharp' in lib && lib.sharp) {
 			thumbnailBuffer = await lib.sharp.default(coverBuffer).resize(252, 252).jpeg().toBuffer()
 		} else if ('jimp' in lib && lib.jimp) {
-			const jimpImage = await lib.jimp.Jimp.read(coverBuffer)
-			thumbnailBuffer = await jimpImage.resize({ w: 252, h: 252 }).getBuffer('image/jpeg')
+			try {
+				const jimpImage = await lib.jimp.Jimp.read(coverBuffer)
+				thumbnailBuffer = await jimpImage.resize({ w: 252, h: 252 }).getBuffer('image/jpeg')
+			} catch {
+				const fallbackImage = new lib.jimp.Jimp({ width: 252, height: 252, color: 0xffffffff })
+				thumbnailBuffer = await fallbackImage.getBuffer('image/jpeg')
+			}
 		} else {
 			throw new Error('No image processing library available for thumbnail generation')
 		}

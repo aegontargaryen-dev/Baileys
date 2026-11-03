@@ -673,6 +673,17 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 			statusJidList
 		}: MessageRelayOptions
 	) => {
+		if (jidDecode(jid)?.server === 's.whatsapp.net') {
+			try {
+				const mappedLid = await getLIDForPN(jid)
+				if (mappedLid) {
+					jid = mappedLid
+				}
+			} catch (error: any) {
+				logger.debug({ jid, err: error?.message }, 'failed to check LID mapping for PN')
+			}
+		}
+
 		const meId = assertMeId(authState.creds)
 		const meLid = authState.creds.me?.lid
 		const isRetryResend = Boolean(participant?.jid)
@@ -722,7 +733,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 			}
 
 			if (isNewsletter) {
-				const patched = patchMessageBeforeSending ? await patchMessageBeforeSending(message, []) : message
+				const patched = (patchMessageBeforeSending ? await patchMessageBeforeSending(message, []) : message) as proto.IMessage
 				const isNewsletterEdit =
 					!!patched.protocolMessage?.editedMessage &&
 					patched.protocolMessage.type === proto.Message.ProtocolMessage.Type.MESSAGE_EDIT
@@ -1422,6 +1433,17 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 			return message
 		},
 		sendMessage: async (jid: string, content: AnyMessageContent, options: MiscMessageGenerationOptions = {}) => {
+			if (jidDecode(jid)?.server === 's.whatsapp.net') {
+				try {
+					const mappedLid = await getLIDForPN(jid)
+					if (mappedLid) {
+						jid = mappedLid
+					}
+				} catch (error: any) {
+					logger.debug({ jid, err: error?.message }, 'failed to check LID mapping for PN')
+				}
+			}
+
 			const userJid = authState.creds.me!.id
 			if (
 				typeof content === 'object' &&

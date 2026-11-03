@@ -810,7 +810,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 				onBeforeSessionRefresh: reissueTcTokenAfterIdentityChange,
 				onParticipantIdentityChange: (jid, me) => {
 					const normalized = jidNormalizedUser(jid)
-					sock.recentlyChangedIdentities.add(normalized)
+					sock.recentlyChangedIdentities?.add(normalized)
 					ev.emit('identity-change', { jid: normalized, me })
 
 					const existing = identityChangeCleanupTimers.get(normalized)
@@ -820,7 +820,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 
 					const timeout = setTimeout(
 						() => {
-							sock.recentlyChangedIdentities.delete(normalized)
+							sock.recentlyChangedIdentities?.delete(normalized)
 							identityChangeCleanupTimers.delete(normalized)
 						},
 						10 * 60 * 1000
@@ -2251,7 +2251,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 			clearTimeout(timer)
 		}
 		identityChangeCleanupTimers.clear()
-		sock.recentlyChangedIdentities.clear()
+		sock.recentlyChangedIdentities?.clear()
 		sendActiveReceipts = false
 	})
 

@@ -1,37 +1,40 @@
 import { Boom } from '@hapi/boom'
 import { jest } from '@jest/globals'
-import sharp from 'sharp'
 import { proto as WAProto } from '../..'
 import type { MediaType } from '../../Defaults'
 import type { MessageContentGenerationOptions, StickerPack } from '../../Types'
 import { createStoredZip, generateWAMessageContent, readStoredZip } from '../../Utils/messages'
 
-// Create a valid test image using sharp
-const createTestImage = async (width = 100, height = 100, color = { r: 255, g: 0, b: 0 }): Promise<Buffer> => {
-	return sharp({
-		create: {
-			width,
-			height,
-			channels: 3,
-			background: color
-		}
-	})
-		.png()
-		.toBuffer()
+const buildStaticWebP = (width = 100, height = 100, color = { r: 255, g: 0, b: 0 }, extraChunk?: Buffer): Buffer => {
+	const riffHeader = Buffer.from('RIFF')
+	const webpHeader = Buffer.from('WEBP')
+	const payload = Buffer.from([
+		width & 0xff,
+		(width >> 8) & 0xff,
+		height & 0xff,
+		(height >> 8) & 0xff,
+		color.r & 0xff,
+		color.g & 0xff,
+		color.b & 0xff,
+		0x01
+	])
+	const vp8lChunk = Buffer.alloc(8 + payload.length)
+	vp8lChunk.write('VP8L', 0, 4, 'ascii')
+	vp8lChunk.writeUInt32LE(payload.length, 4)
+	payload.copy(vp8lChunk, 8)
+
+	const chunks = extraChunk ? [vp8lChunk, extraChunk] : [vp8lChunk]
+	const out = Buffer.concat([riffHeader, Buffer.alloc(4), webpHeader, ...chunks])
+	out.writeUInt32LE(out.length - 8, 4)
+	return out
 }
 
-// Create a WebP image for testing
+const createTestImage = async (width = 100, height = 100, color = { r: 255, g: 0, b: 0 }): Promise<Buffer> => {
+	return buildStaticWebP(width, height, color)
+}
+
 const createTestWebP = async (width = 100, height = 100, color = { r: 255, g: 0, b: 0 }): Promise<Buffer> => {
-	return sharp({
-		create: {
-			width,
-			height,
-			channels: 3,
-			background: color
-		}
-	})
-		.webp()
-		.toBuffer()
+	return buildStaticWebP(width, height, color)
 }
 
 /**
@@ -39,34 +42,6 @@ const createTestWebP = async (width = 100, height = 100, color = { r: 255, g: 0,
  * This creates a valid animated WebP with VP8X header and animation flag set.
  */
 const createAnimatedWebP = async (): Promise<Buffer> => {
-	// Create two frames with different colors
-	const frame1 = await sharp({
-		create: { width: 100, height: 100, channels: 3, background: { r: 255, g: 0, b: 0 } }
-	})
-		.webp()
-		.toBuffer()
-
-	await sharp({
-		create: { width: 100, height: 100, channels: 3, background: { r: 0, g: 0, b: 255 } }
-	})
-		.webp()
-		.toBuffer()
-
-	// Use sharp to create an animated WebP from the frames
-	const animatedWebP = await sharp(frame1, { animated: true }).webp({ loop: 0 }).toBuffer()
-
-	// If sharp doesn't create animation from a single frame, manually construct
-	// a minimal animated WebP structure for testing
-	// Check if the buffer has animation by looking for VP8X with animation flag
-	const hasAnimation =
-		animatedWebP.length >= 21 && animatedWebP.toString('ascii', 12, 16) === 'VP8X' && (animatedWebP[20]! & 0x02) !== 0
-
-	if (hasAnimation) {
-		return animatedWebP
-	}
-
-	// Create a minimal animated WebP manually for testing purposes
-	// This creates a valid WebP with VP8X extended header with animation flag
 	const riffHeader = Buffer.from('RIFF')
 	const webpHeader = Buffer.from('WEBP')
 
@@ -75,7 +50,6 @@ const createAnimatedWebP = async (): Promise<Buffer> => {
 	vp8xChunk.write('VP8X', 0, 4, 'ascii')
 	vp8xChunk.writeUInt32LE(10, 4) // chunk size
 	vp8xChunk[8] = 0x02 // flags: animation bit set
-	// Canvas size (100x100) - 1 in 24-bit format
 	vp8xChunk.writeUIntLE(99, 12, 3) // width - 1
 	vp8xChunk.writeUIntLE(99, 15, 3) // height - 1
 
@@ -86,73 +60,31 @@ const createAnimatedWebP = async (): Promise<Buffer> => {
 	animChunk.writeUInt32LE(0xffffffff, 8) // background color (white)
 	animChunk.writeUInt16LE(0, 12) // loop count (0 = infinite)
 
-	// ANMF chunk (animation frame) - minimal frame using VP8L
-	// We'll include the actual image data from a static WebP
-	const staticWebp = await sharp({
-		create: { width: 100, height: 100, channels: 4, background: { r: 255, g: 0, b: 0, alpha: 1 } }
-	})
-		.webp({ lossless: true })
-		.toBuffer()
+	const staticWebp = buildStaticWebP(100, 100, { r: 255, g: 0, b: 0 })
+	const vp8lChunk = staticWebp.subarray(12)
 
-	// Extract the VP8L chunk from static WebP
-	let vp8lOffset = 12
-	let vp8lChunk: Buffer | null = null
-	while (vp8lOffset < staticWebp.length - 8) {
-		const chunkName = staticWebp.toString('ascii', vp8lOffset, vp8lOffset + 4)
-		const chunkSize = staticWebp.readUInt32LE(vp8lOffset + 4)
-		if (chunkName === 'VP8L' || chunkName === 'VP8 ') {
-			vp8lChunk = staticWebp.slice(vp8lOffset, vp8lOffset + 8 + chunkSize + (chunkSize % 2))
-			break
-		}
-
-		vp8lOffset += 8 + chunkSize + (chunkSize % 2)
-	}
-
-	if (!vp8lChunk) {
-		// Fallback: just return a buffer with animation markers
-		// This won't be a valid image but will test animation detection
-		const fakeAnimatedWebp = Buffer.concat([
-			riffHeader,
-			Buffer.alloc(4), // size placeholder
-			webpHeader,
-			vp8xChunk,
-			animChunk
-		])
-		fakeAnimatedWebp.writeUInt32LE(fakeAnimatedWebp.length - 8, 4)
-		return fakeAnimatedWebp
-	}
-
-	// Create ANMF chunk wrapping the VP8L data
 	const frameDataSize = vp8lChunk.length
 	const anmfHeader = Buffer.alloc(24)
 	anmfHeader.write('ANMF', 0, 4, 'ascii')
-	anmfHeader.writeUInt32LE(16 + frameDataSize, 4) // chunk size
-	// Frame X, Y (0, 0)
+	anmfHeader.writeUInt32LE(16 + frameDataSize, 4)
 	anmfHeader.writeUIntLE(0, 8, 3)
 	anmfHeader.writeUIntLE(0, 11, 3)
-	// Frame width, height - 1
 	anmfHeader.writeUIntLE(99, 14, 3)
 	anmfHeader.writeUIntLE(99, 17, 3)
-	// Duration (100ms)
 	anmfHeader.writeUIntLE(100, 20, 3)
-	// Flags
 	anmfHeader[23] = 0
 
 	const anmfChunk = Buffer.concat([anmfHeader, vp8lChunk])
 
-	// Combine all chunks
 	const animatedBuffer = Buffer.concat([
 		riffHeader,
-		Buffer.alloc(4), // size placeholder
+		Buffer.alloc(4),
 		webpHeader,
 		vp8xChunk,
 		animChunk,
 		anmfChunk
 	])
-
-	// Set RIFF size
 	animatedBuffer.writeUInt32LE(animatedBuffer.length - 8, 4)
-
 	return animatedBuffer
 }
 
@@ -160,25 +92,13 @@ const createAnimatedWebP = async (): Promise<Buffer> => {
  * Creates a WebP buffer with EXIF metadata for testing exif preservation.
  */
 const createWebPWithExif = async (): Promise<Buffer> => {
-	// Create a WebP with metadata using sharp
-	return sharp({
-		create: {
-			width: 100,
-			height: 100,
-			channels: 3,
-			background: { r: 128, g: 128, b: 128 }
-		}
-	})
-		.withMetadata({
-			exif: {
-				IFD0: {
-					Copyright: 'Test Copyright',
-					Artist: 'Test Artist'
-				}
-			}
-		})
-		.webp()
-		.toBuffer()
+	const exifPayload = Buffer.from('Exif\0\0Test Copyright - Test Artist', 'ascii')
+	const paddedLength = exifPayload.length + (exifPayload.length % 2)
+	const exifChunk = Buffer.alloc(8 + paddedLength)
+	exifChunk.write('EXIF', 0, 4, 'ascii')
+	exifChunk.writeUInt32LE(exifPayload.length, 4)
+	exifPayload.copy(exifChunk, 8)
+	return buildStaticWebP(100, 100, { r: 128, g: 128, b: 128 }, exifChunk)
 }
 
 let MINIMAL_PNG: Buffer
@@ -273,22 +193,8 @@ describe('Sticker Pack Messages', () => {
 		})
 
 		it('should reject sticker exceeding 1MB size limit', async () => {
-			// Create a large image with random noise (harder to compress)
-			// 2000x2000 with 3 channels with noise should result in > 1MB webp
-			const width = 2000
-			const height = 2000
-			const channels = 3
-			const rawData = Buffer.alloc(width * height * channels)
-			// Fill with random data to prevent compression
-			for (let i = 0; i < rawData.length; i++) {
-				rawData[i] = Math.floor(Math.random() * 256)
-			}
-
-			const largeSticker = await sharp(rawData, {
-				raw: { width, height, channels }
-			})
-				.png()
-				.toBuffer()
+			const largePayload = Buffer.alloc(1024 * 1024 + 64, 0xaa)
+			const largeSticker = buildStaticWebP(100, 100, { r: 255, g: 0, b: 0 }, largePayload)
 
 			const stickerPack: StickerPack = {
 				name: 'Test Pack',

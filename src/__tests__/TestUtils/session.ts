@@ -3,6 +3,7 @@ import { promises as fs } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { useMultiFileAuthState } from '../..'
+import { WebSocketClient } from '../../Socket/Client/websocket'
 
 /**
  * Creates a temporary, isolated authentication state for tests.
@@ -31,17 +32,14 @@ export const makeSession = async () => {
 }
 
 export const mockWebSocket = () => {
-	jest.mock('../../Socket/Client/websocket', () => {
-		return {
-			WebSocketClient: jest.fn().mockImplementation(() => ({
-				connect: jest.fn(() => Promise.resolve()),
-				close: jest.fn(),
-				on: jest.fn(),
-				off: jest.fn(),
-				emit: jest.fn(),
-				send: jest.fn(),
-				isOpen: true
-			}))
-		}
+	jest.spyOn(WebSocketClient.prototype, 'connect').mockImplementation(async () => {})
+	jest.spyOn(WebSocketClient.prototype, 'close').mockImplementation(async () => {})
+	jest.spyOn(WebSocketClient.prototype, 'send').mockImplementation(((_data: any, cb?: (err?: Error) => void) => {
+		cb?.()
+		return true
+	}) as any)
+	Object.defineProperty(WebSocketClient.prototype, 'isOpen', {
+		get: () => true,
+		configurable: true
 	})
 }
