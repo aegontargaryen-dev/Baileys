@@ -78,6 +78,7 @@ import {
 	getBinaryNodeChildUInt,
 	isJidBroadcast,
 	isJidGroup,
+	isJidMetaAI,
 	isJidNewsletter,
 	isJidStatusBroadcast,
 	isLidUser,
@@ -1680,14 +1681,22 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 		}
 	}
 
-	const handleMessage = async (node: BinaryNode) => {
-		const encNode = getBinaryNodeChild(node, 'enc')
-		// TODO: temporary fix for crashes and issues resulting of failed msmsg decryption
-		if (encNode?.attrs.type === 'msmsg') {
-			logger.debug({ key: node.attrs.key }, 'ignored msmsg')
-			await sendMessageAck(node, NACK_REASONS.MissingMessageSecret)
-			return
+	// The secret a bot's reply is encrypted with is the messageSecret of the message we sent it.
+	const getBotMessageSecret = async (key: WAMessageKey) => {
+		let message = messageRetryManager?.getRecentMessage(key.remoteJid!, key.id!)?.message
+		if (!message) {
+			try {
+				message = await getMessage(key)
+			} catch (err) {
+				logger.warn({ err, key }, 'failed to get message for bot reply secret')
+			}
 		}
+
+		return message?.messageContextInfo?.messageSecret
+	}
+
+	const handleMessage = async (node: BinaryNode) => {
+		const isBotReply = getBinaryNodeChildren(node, 'enc').some(enc => enc.attrs.type === 'msmsg')
 
 		let acked = false
 
@@ -1697,7 +1706,14 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 				category,
 				author,
 				decrypt
-			} = decryptMessageNode(node, authState.creds.me!.id, authState.creds.me!.lid || '', signalRepository, logger)
+			} = decryptMessageNode(
+				node,
+				authState.creds.me!.id,
+				authState.creds.me!.lid || '',
+				signalRepository,
+				logger,
+				getBotMessageSecret
+			)
 
 			const alt = msg.key.participantAlt || msg.key.remoteJidAlt
 			// store new mappings we didn't have before
@@ -1727,6 +1743,13 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 					if (msg?.messageStubParameters?.[0] === MISSING_KEYS_ERROR_TEXT) {
 						acked = true
 						return sendMessageAck(node, NACK_REASONS.ParsingError)
+					}
+
+					// A bot reply is not Signal-encrypted, so a retry receipt cannot help
+					if (isBotReply) {
+						logger.debug({ key: msg.key, reason: msg.messageStubParameters?.[0] }, 'failed to decrypt bot reply')
+						acked = true
+						return sendMessageAck(node, NACK_REASONS.MissingMessageSecret)
 					}
 
 					if (msg.messageStubParameters?.[0] === NO_MESSAGE_FOUND_ERROR_TEXT) {
@@ -1845,7 +1868,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 							// message was sent by us from a different device
 							type = 'sender'
 							// need to specially handle this case
-							if (isLidUser(msg.key.remoteJid!) || isLidUser(msg.key.remoteJidAlt)) {
+							if (isLidUser(msg.key.remoteJid!) || isLidUser(msg.key.remoteJidAlt) || isJidMetaAI(msg.key.remoteJid!)) {
 								participant = author // TODO: investigate sending receipts to LIDs and not PNs
 							}
 						} else if (!sendActiveReceipts) {
