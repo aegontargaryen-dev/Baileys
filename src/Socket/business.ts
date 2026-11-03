@@ -1,3 +1,4 @@
+import { Boom } from '@hapi/boom'
 import type { GetCatalogOptions, ProductCreate, ProductUpdate, SocketConfig, WAMediaUpload } from '../Types'
 import type { UpdateBussinesProfileProps } from '../Types/Bussines'
 import { getRawMediaUploadData } from '../Utils'
@@ -255,6 +256,12 @@ export const makeBusinessSocket = (config: SocketConfig) => {
 	}
 
 	const getOrderDetails = async (orderId: string, tokenBase64: string, jid?: string) => {
+		if (!jid) {
+			throw new Boom('getOrderDetails requires the seller jid: the MEX order query cannot default it to your own JID', {
+				statusCode: 400
+			})
+		}
+
 		return fetchMexOrderDetails({
 			orderId,
 			token: tokenBase64,

@@ -51,6 +51,10 @@ export const fetchMexOrderDetails = async ({
 	executeQuery,
 	logger
 }: FetchMexOrderDetailsOptions) => {
+	if (!orderId?.trim() || !token?.trim()) {
+		throw new Boom('Order details require a non-empty orderId and token', { statusCode: 400 })
+	}
+
 	// Resolve known local aliases before the single request; MEX failures must never select another JID.
 	const jid = resolveOrderMexJid(requestedJid, ownJids)
 	if (!jid) throw new Boom('Order details require a valid seller JID', { statusCode: 400 })

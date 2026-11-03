@@ -1,6 +1,6 @@
 import { Mutex } from 'async-mutex'
 import { randomBytes } from 'crypto'
-import { mkdir, readFile, rename, stat, unlink, writeFile } from 'fs/promises'
+import { mkdir, readdir, readFile, rename, stat, unlink, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { proto } from '../../WAProto/index.js'
 import type { AuthenticationCreds, AuthenticationState, SignalDataTypeMap } from '../Types'
@@ -129,6 +129,14 @@ export const useMultiFileAuthState = async (
 		}
 	} else {
 		await mkdir(folder, { recursive: true })
+	}
+
+	// A crash between writeFile(tmp) and rename orphans a temp file holding
+	// full key material; sweep stale siblings left by earlier processes.
+	for (const entry of await readdir(folder).catch(() => [] as string[])) {
+		if (/^\S+\.\d+\.[0-9a-f]+\.tmp$/.test(entry) && !entry.includes(`.${process.pid}.`)) {
+			await unlink(join(folder, entry)).catch(() => {})
+		}
 	}
 
 	const fixFileName = (file?: string) => file?.replace(/\//g, '__')?.replace(/:/g, '-')

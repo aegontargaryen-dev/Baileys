@@ -9,6 +9,7 @@ export class LIDMappingStore {
 		ttl: 3 * 24 * 60 * 60 * 1000, // 3 days
 		updateAgeOnGet: true
 	})
+	private readonly negativeCache = new LRUCache<string, true>({ max: 10_000, ttl: 5 * 60 * 1000, ttlAutopurge: true })
 	private readonly keys: SignalKeyStoreWithTransaction
 	private readonly logger: ILogger
 
@@ -104,14 +105,23 @@ export class LIDMappingStore {
 			await this.keys.set({ 'lid-mapping': batchData })
 		}, 'lid-mapping')
 
-		// Update cache after successful DB write
+		// Update cache after successful DB write, then notify: a throwing
+		// listener must not abort caching of the remaining pairs.
 		for (const [pnUser, lidUser] of Object.entries(pairMap)) {
 			this.mappingCache.set(`pn:${pnUser}`, lidUser)
 			this.mappingCache.set(`lid:${lidUser}`, pnUser)
-			this.onMappingStored?.({
-				lid: `${lidUser}@lid`,
-				pn: `${pnUser}@s.whatsapp.net`
-			})
+			this.negativeCache.delete(pnUser)
+		}
+
+		for (const [pnUser, lidUser] of Object.entries(pairMap)) {
+			try {
+				this.onMappingStored?.({
+					lid: `${lidUser}@lid`,
+					pn: `${pnUser}@s.whatsapp.net`
+				})
+			} catch (err) {
+				this.logger.warn({ err }, 'onMappingStored listener threw')
+			}
 		}
 	}
 
@@ -202,7 +212,7 @@ export class LIDMappingStore {
 						this.logger.warn(`Invalid entry for ${pn} (pair not resolved)`)
 						continue
 					}
-				} else {
+				} else if (!this.negativeCache.has(pnUser)) {
 					this.logger.trace(`No LID mapping found for PN user ${pnUser}; batch getting from USync`)
 					const device = decoded!.device || 0
 					let normalizedPn = jidNormalizedUser(pn)
@@ -230,7 +240,7 @@ export class LIDMappingStore {
 					const lidUser = jidDecode(pair.lid)?.user
 					if (!lidUser) continue
 
-					for (const device of usyncFetch[pair.pn]!) {
+					for (const device of usyncFetch[pair.pn] ?? [jidDecode(pair.pn)?.device ?? 0]) {
 						const deviceSpecificLid = `${lidUser}${!!device ? `:${device}` : ``}@${device === 99 ? 'hosted.lid' : 'lid'}`
 
 						this.logger.trace(
@@ -244,6 +254,13 @@ export class LIDMappingStore {
 				}
 			} else {
 				this.logger.warn('USync fetch yielded no results for pending PNs')
+			}
+		}
+
+		for (const fetchedPn of Object.keys(usyncFetch)) {
+			const fetchedUser = jidDecode(fetchedPn)?.user
+			if (fetchedUser && !Object.values(successfulPairs).some(pair => jidDecode(pair.pn)?.user === fetchedUser)) {
+				this.negativeCache.set(fetchedUser, true)
 			}
 		}
 
@@ -341,5 +358,6 @@ export class LIDMappingStore {
 	 */
 	close(): void {
 		this.mappingCache.clear()
+		this.negativeCache.clear()
 	}
 }

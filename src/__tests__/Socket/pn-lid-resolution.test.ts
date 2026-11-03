@@ -113,7 +113,7 @@ describe('PN to LID Resolution (Issues #2683, #2698, #2688)', () => {
 			},
 			auth: {
 				creds: {
-					me: { id: 'me@s.whatsapp.net' }
+					me: { id: 'me@s.whatsapp.net', lid: 'me@lid' }
 				},
 				keys: {
 					get: jest.fn<any>().mockResolvedValue({}),
@@ -153,9 +153,10 @@ describe('PN to LID Resolution (Issues #2683, #2698, #2688)', () => {
 
 		const sock = createTestSocket()
 
-		await sock.sendMessage('12345@s.whatsapp.net', { text: 'test' })
+		const sent = await sock.sendMessage('12345@s.whatsapp.net', { text: 'test' })
 
 		expect(mockLidMapping.getLIDForPN).toHaveBeenCalledWith('12345@s.whatsapp.net')
+		expect(sent?.key.remoteJid).toBe('12345@s.whatsapp.net')
 	})
 
 	it('should resolve destination JID to mapped LID when mapping exists', async () => {
@@ -163,17 +164,21 @@ describe('PN to LID Resolution (Issues #2683, #2698, #2688)', () => {
 
 		const sock = createTestSocket()
 
-		await sock.sendMessage('12345@s.whatsapp.net', { text: 'test' })
+		const sent = await sock.sendMessage('12345@s.whatsapp.net', { text: 'test' })
 
 		expect(mockLidMapping.getLIDForPN).toHaveBeenCalledWith('12345@s.whatsapp.net')
+		// The emitted key must name the LID chat the wire stanza was sent to,
+		// or retry receipts can never match the cached message.
+		expect(sent?.key.remoteJid).toBe('98765@lid')
 	})
 
 	it('should keep destination JID unchanged when sending directly to LID', async () => {
 		const sock = createTestSocket()
 
-		await sock.sendMessage('98765@lid', { text: 'test' })
+		const sent = await sock.sendMessage('98765@lid', { text: 'test' })
 
 		expect(mockLidMapping.getLIDForPN).not.toHaveBeenCalled()
+		expect(sent?.key.remoteJid).toBe('98765@lid')
 	})
 
 	it('should keep destination JID unchanged for groups', async () => {

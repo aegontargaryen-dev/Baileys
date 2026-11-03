@@ -21,11 +21,11 @@ export class USyncUsernameProtocol implements USyncQueryProtocol {
 		if (node.tag === 'username') {
 			assertNodeErrorFree(node)
 			if (typeof node.content === 'string') {
-				return node.content
+				return node.content || null
 			}
 
 			if (Buffer.isBuffer(node.content) || node.content instanceof Uint8Array) {
-				return Buffer.from(node.content).toString('utf-8')
+				return Buffer.from(node.content).toString('utf-8') || null
 			}
 		}
 

@@ -307,7 +307,8 @@ export const extractGroupMetadata = (result: BinaryNode) => {
 		// Mirror WAWeb: surface server/client errors with their code+text instead of crashing.
 		const errorNode = getBinaryNodeChild(result, 'error')
 		if (errorNode) {
-			const code = errorNode.attrs.code ? +errorNode.attrs.code : 500
+			const rawCode = errorNode.attrs.code ? +errorNode.attrs.code : 500
+			const code = rawCode >= 400 && rawCode <= 599 ? rawCode : 500
 			const text = errorNode.attrs.text || 'group metadata query failed'
 			throw new Boom(text, { statusCode: code, data: errorNode })
 		}
@@ -347,7 +348,7 @@ export const extractGroupMetadata = (result: BinaryNode) => {
 		subjectOwnerPn: group.attrs.s_o_pn,
 		subjectOwnerUsername: group.attrs.s_o_username,
 		subjectTime: +group.attrs.s_t!,
-		size: group.attrs.size ? +group.attrs.size : getBinaryNodeChildren(group, 'participant').length,
+		size: Number.isNaN(+group.attrs.size!) ? getBinaryNodeChildren(group, 'participant').length : +group.attrs.size!,
 		creation: +group.attrs.creation!,
 		owner: group.attrs.creator ? jidNormalizedUser(group.attrs.creator) : undefined,
 		ownerPn: group.attrs.creator_pn ? jidNormalizedUser(group.attrs.creator_pn) : undefined,

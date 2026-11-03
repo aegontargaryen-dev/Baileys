@@ -4,8 +4,23 @@ import { type BinaryNode, getBinaryNodeChild, jidNormalizedUser } from '../WABin
 import { aesDecryptGCM, hkdf } from './crypto'
 
 const META_AI_PERSONA_ID = '867051314767696$760019659443059'
+const META_AI_BOT_JID = '867051314767696@bot'
 const MUSE_JID = '1807055946647697@bot'
 const MUSE_PERSONA_ID = '1807055946647697$1'
+
+const defaultPersonaId = (botJid: string): string | undefined => {
+	const normalized = jidNormalizedUser(botJid)
+	if (normalized === MUSE_JID) {
+		return MUSE_PERSONA_ID
+	}
+
+	// META_AI_JID ('13135550002@c.us') normalizes to the @s.whatsapp.net form.
+	if (normalized === META_AI_BOT_JID || normalized === '13135550002@s.whatsapp.net') {
+		return META_AI_PERSONA_ID
+	}
+
+	return undefined
+}
 
 /**
  * Give a message for a native bot what the bot's reply depends on: a 32-byte
@@ -15,13 +30,14 @@ const MUSE_PERSONA_ID = '1807055946647697$1'
  */
 export const prepareMessageForBot = (message: proto.IMessage, botJid: string) => {
 	const context = (message.messageContextInfo ||= {})
-	if (!context.messageSecret?.length) {
+	if (context.messageSecret?.length !== 32) {
 		context.messageSecret = randomBytes(32)
 	}
 
-	if (!context.botMetadata) {
-		context.botMetadata = {
-			personaId: jidNormalizedUser(botJid) === MUSE_JID ? MUSE_PERSONA_ID : META_AI_PERSONA_ID
+	if (!context.botMetadata?.personaId) {
+		const personaId = defaultPersonaId(botJid)
+		if (personaId) {
+			context.botMetadata = { ...context.botMetadata, personaId }
 		}
 	}
 }

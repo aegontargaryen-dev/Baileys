@@ -95,13 +95,13 @@ export async function resolveTcTokenJid(
 	logger?: ILogger
 ): Promise<string> {
 	jid = jidNormalizedUser(jid)
-	if (isLidUser(jid)) return jid
-	if (!isPnUser(jid)) return jid
+	if (isLidUser(jid) || isHostedLidUser(jid)) return jid
+	if (!isPnUser(jid) && !isHostedPnUser(jid)) return jid
 	try {
 		const lid = await getLIDForPN(jid)
 		return lid ? jidNormalizedUser(lid) : jid
-	} catch (error: any) {
-		logger?.debug({ jid, err: error?.message }, 'failed to resolve TcToken JID')
+	} catch (error) {
+		logger?.debug({ jid, err: error }, 'failed to resolve TcToken JID')
 		return jid
 	}
 }
@@ -116,24 +116,24 @@ export async function resolveIssuanceJid(
 ): Promise<string> {
 	jid = jidNormalizedUser(jid)
 	if (issueToLid) {
-		if (isLidUser(jid)) return jid
-		if (!isPnUser(jid)) return jid
+		if (isLidUser(jid) || isHostedLidUser(jid)) return jid
+		if (!isPnUser(jid) && !isHostedPnUser(jid)) return jid
 		try {
 			const lid = await getLIDForPN(jid)
 			return lid ? jidNormalizedUser(lid) : jid
-		} catch (error: any) {
-			logger?.debug({ jid, err: error?.message }, 'failed to resolve Issuance LID JID')
+		} catch (error) {
+			logger?.debug({ jid, err: error }, 'failed to resolve Issuance LID JID')
 			return jid
 		}
 	}
 
-	if (!isLidUser(jid)) return jid
+	if (!isLidUser(jid) && !isHostedLidUser(jid)) return jid
 	if (getPNForLID) {
 		try {
 			const pn = await getPNForLID(jid)
 			return pn ? jidNormalizedUser(pn) : jid
-		} catch (error: any) {
-			logger?.debug({ jid, err: error?.message }, 'failed to resolve Issuance PN JID')
+		} catch (error) {
+			logger?.debug({ jid, err: error }, 'failed to resolve Issuance PN JID')
 			return jid
 		}
 	}
@@ -246,5 +246,5 @@ export async function storeTcTokensFromIqResult({
 
 /** Client-side fallback token when the recipient hasn't issued a tctoken. Mirrors WA Web genCsTokenBody. */
 export function computeCsToken(nctSalt: Uint8Array, recipientLid: string): Uint8Array {
-	return new Uint8Array(createHmac('sha256', nctSalt).update(recipientLid, 'utf8').digest())
+	return new Uint8Array(createHmac('sha256', nctSalt).update(jidNormalizedUser(recipientLid), 'utf8').digest())
 }

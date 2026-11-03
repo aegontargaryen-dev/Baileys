@@ -530,6 +530,32 @@ export type MediaDownloadOptions = {
 	options?: RequestInit
 	/** Optional media host override; falls back to DEF_MEDIA_HOST when not provided. */
 	host?: string
+	/**
+	 * Allow downloading without a mediaKey (plaintext response). Only
+	 * newsletter media is served unencrypted; for everything else a missing
+	 * key means the ciphertext would be handed back as if it were plaintext.
+	 */
+	allowPlaintext?: boolean
+}
+
+const normalizeHeaders = (headersInit: HeadersInit | undefined): Record<string, string> => {
+	if (!headersInit) {
+		return {}
+	}
+
+	if (Array.isArray(headersInit)) {
+		return Object.fromEntries(headersInit)
+	}
+
+	if (typeof Headers !== 'undefined' && headersInit instanceof Headers) {
+		const normalized: Record<string, string> = {}
+		headersInit.forEach((value, key) => {
+			normalized[key] = value
+		})
+		return normalized
+	}
+
+	return { ...(headersInit as Record<string, string>) }
 }
 
 export const getUrlFromDirectPath = (directPath: string, host: string = DEF_MEDIA_HOST) =>
@@ -558,11 +584,15 @@ export const downloadContentFromMessage = async (
 	}
 
 	if (!mediaKey || mediaKey.length === 0) {
+		if (!opts.allowPlaintext) {
+			throw new Boom('Cannot download encrypted media without a mediaKey', { statusCode: 400 })
+		}
+
 		return getHttpStream(downloadUrl, {
 			...opts.options,
 			headers: {
 				Origin: DEFAULT_ORIGIN,
-				...(opts.options?.headers as Record<string, string>),
+				...normalizeHeaders(opts.options?.headers),
 				...(opts.startByte !== undefined || opts.endByte !== undefined
 					? { Range: `bytes=${opts.startByte ?? 0}-${opts.endByte ?? ''}` }
 					: {})
@@ -600,13 +630,8 @@ export const downloadEncryptedContent = async (
 
 	const endChunk = endByte ? toSmallestChunkSize(endByte || 0) + AES_CHUNK_SIZE : undefined
 
-	const headersInit = options?.headers ? options.headers : undefined
 	const headers: Record<string, string> = {
-		...(headersInit
-			? Array.isArray(headersInit)
-				? Object.fromEntries(headersInit)
-				: (headersInit as Record<string, string>)
-			: {}),
+		...normalizeHeaders(options?.headers),
 		Origin: DEFAULT_ORIGIN
 	}
 	if (startChunk || endChunk) {
@@ -675,6 +700,13 @@ export const downloadEncryptedContent = async (
 		},
 		final(callback) {
 			try {
+				// A complete download ends with the decipher initialized and
+				// at most the trailing 10-byte MAC undecrypted; anything else
+				// is a truncated body and must not pass as a successful download.
+				if (!endByte && (!aes || (remainingBytes.length !== 0 && remainingBytes.length !== 10))) {
+					return callback(new Boom('Encrypted media download is empty or truncated', { statusCode: 502 }))
+				}
+
 				if (aes) {
 					pushBytes(aes.final(), b => this.push(b))
 				}
@@ -793,6 +825,10 @@ export const uploadWithNodeHttp = async (
 				}
 
 				let body = ''
+				res.on('error', err => {
+					stream.destroy()
+					reject(err)
+				})
 				res.on('data', chunk => (body += chunk))
 				res.on('end', () => {
 					stream.destroy()
@@ -954,7 +990,7 @@ export const getWAUploadToServer = (
 
 				if (result?.url || result?.direct_path) {
 					urls = {
-						mediaUrl: result.url || result.direct_path!,
+						mediaUrl: result.url || getUrlFromDirectPath(result.direct_path!, hostname),
 						directPath: result.direct_path!,
 						meta_hmac: result.meta_hmac,
 						fbid: result.fbid,

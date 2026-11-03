@@ -388,7 +388,10 @@ export const makeSocket = (config: SocketConfig) => {
 	const keys = addTransactionCapability(authState.keys, logger, transactionOpts)
 	const signalRepository = makeSignalRepository({ creds, keys }, logger, pnFromLIDUSync)
 	if (signalRepository?.lidMapping && typeof signalRepository.lidMapping === 'object') {
-		;(signalRepository.lidMapping as { onMappingStored?: (mapping: LIDMapping) => void }).onMappingStored = mapping => {
+		const lidMappingRef = signalRepository.lidMapping as { onMappingStored?: (mapping: LIDMapping) => void }
+		const previousOnMappingStored = lidMappingRef.onMappingStored
+		lidMappingRef.onMappingStored = mapping => {
+			previousOnMappingStored?.(mapping)
 			ev.emit('lid-mapping.update', mapping)
 		}
 	}
@@ -872,6 +875,10 @@ export const makeSocket = (config: SocketConfig) => {
 			if (!pairingReady) {
 				logger.debug('pairing not ready yet, queuing request until pair-device is received')
 				await new Promise<void>((resolve, reject) => {
+					const timer = setTimeout(() => {
+						pendingPairingReject?.(new Boom('Timed out waiting for pair-device', { statusCode: 408 }))
+					}, 120_000)
+					timer.unref?.()
 					pendingPairingResolve = () => {
 						pendingPairingResolve = undefined
 						pendingPairingReject = undefined
@@ -918,7 +925,12 @@ export const makeSocket = (config: SocketConfig) => {
 		})
 	}
 
-	ws.on('message', onMessageReceived)
+	ws.on('message', (data: Buffer) => {
+		onMessageReceived(data).catch(err => {
+			logger.error({ err }, 'failed to decode incoming frame')
+			void end(err)
+		})
+	})
 
 	ws.on('open', async () => {
 		try {
@@ -968,7 +980,9 @@ export const makeSocket = (config: SocketConfig) => {
 		const identityKeyB64 = Buffer.from(creds.signedIdentityKey.public).toString('base64')
 
 		const renderer = makePairingQRRenderer(
-			refNodes.map(refNode => (refNode.content as Buffer).toString('utf-8')),
+			refNodes.map(refNode =>
+				Buffer.isBuffer(refNode.content) ? refNode.content.toString('utf-8') : String(refNode.content ?? '')
+			),
 			// creds.advSecretKey is read per render rather than captured once:
 			// a companion_reg_refresh rotates it mid-flow.
 			ref =>

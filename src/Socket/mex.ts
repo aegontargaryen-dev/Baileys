@@ -36,7 +36,12 @@ export const executeWMexQuery = async <T>(
 	const result = await wMexQuery(variables, queryId, query, generateMessageTag)
 	const child = getBinaryNodeChild(result, 'result')
 	if (child?.content) {
-		const data = JSON.parse(child.content.toString())
+		let data: any
+		try {
+			data = JSON.parse(child.content.toString())
+		} catch {
+			throw new Boom('Failed to parse MEX response as JSON', { statusCode: 502, data: result })
+		}
 
 		if (data.errors && data.errors.length > 0) {
 			const errorMessages = data.errors.map((err: Error) => err.message || 'Unknown error').join(', ')

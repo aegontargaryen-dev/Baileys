@@ -100,11 +100,6 @@ export function makeLibSignalRepository(
 				item.axolotlSenderKeyDistributionMessage
 			)
 			const senderNameStr = senderName.toString()
-			const { [senderNameStr]: senderKey } = await auth.keys.get('sender-key', [senderNameStr])
-			if (!senderKey) {
-				await storage.storeSenderKey(senderName, new SenderKeyRecord())
-			}
-
 			return parsedKeys.transaction(async () => {
 				const { [senderNameStr]: senderKey } = await auth.keys.get('sender-key', [senderNameStr])
 				if (!senderKey) {
@@ -117,18 +112,6 @@ export function makeLibSignalRepository(
 		async decryptMessage({ jid, type, ciphertext }) {
 			const addr = jidToSignalProtocolAddress(jid)
 			const session = new libsignal.SessionCipher(storage, addr)
-
-			// Extract and save sender's identity key before decryption for identity change detection
-			if (type === 'pkmsg') {
-				const identityKey = extractIdentityFromPkmsg(ciphertext)
-				if (identityKey) {
-					const addrStr = addr.toString()
-					const identityChanged = await storage.saveIdentity(addrStr, identityKey)
-					if (identityChanged) {
-						logger.info({ jid, addr: addrStr }, 'identity key changed or new contact, session will be re-established')
-					}
-				}
-			}
 
 			async function doDecrypt() {
 				let result: Buffer
@@ -147,6 +130,20 @@ export function makeLibSignalRepository(
 			// If it's not a sync message, we need to ensure atomicity
 			// For regular messages, we use a transaction to ensure atomicity
 			return parsedKeys.transaction(async () => {
+				// Extract and save sender's identity key before decryption for
+				// identity change detection, inside the transaction so the
+				// identity/session update commits or rolls back with decrypt.
+				if (type === 'pkmsg') {
+					const identityKey = extractIdentityFromPkmsg(ciphertext)
+					if (identityKey) {
+						const addrStr = addr.toString()
+						const identityChanged = await storage.saveIdentity(addrStr, identityKey)
+						if (identityChanged) {
+							logger.info({ jid, addr: addrStr }, 'identity key changed or new contact, session will be re-established')
+						}
+					}
+				}
+
 				return await doDecrypt()
 			}, jid)
 		},

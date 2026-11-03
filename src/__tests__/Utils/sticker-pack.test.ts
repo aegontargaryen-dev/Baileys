@@ -29,10 +29,6 @@ const buildStaticWebP = (width = 100, height = 100, color = { r: 255, g: 0, b: 0
 	return out
 }
 
-const createTestImage = async (width = 100, height = 100, color = { r: 255, g: 0, b: 0 }): Promise<Buffer> => {
-	return buildStaticWebP(width, height, color)
-}
-
 const createTestWebP = async (width = 100, height = 100, color = { r: 255, g: 0, b: 0 }): Promise<Buffer> => {
 	return buildStaticWebP(width, height, color)
 }
@@ -94,10 +90,10 @@ const createWebPWithExif = async (): Promise<Buffer> => {
 	return buildStaticWebP(100, 100, { r: 128, g: 128, b: 128 }, exifChunk)
 }
 
-let MINIMAL_PNG: Buffer
+let RED_WEBP: Buffer
 let MINIMAL_WEBP: Buffer
-let BLUE_PNG: Buffer
-let GREEN_PNG: Buffer
+let BLUE_WEBP: Buffer
+let GREEN_WEBP: Buffer
 let ANIMATED_WEBP: Buffer
 let WEBP_WITH_EXIF: Buffer
 
@@ -140,10 +136,10 @@ const createMockOptions = (): MessageContentGenerationOptions & { uploadCalls: U
 
 describe('Sticker Pack Messages', () => {
 	beforeAll(async () => {
-		MINIMAL_PNG = await createTestImage()
+		RED_WEBP = await createTestWebP()
 		MINIMAL_WEBP = await createTestWebP()
-		BLUE_PNG = await createTestImage(100, 100, { r: 0, g: 0, b: 255 })
-		GREEN_PNG = await createTestImage(100, 100, { r: 0, g: 255, b: 0 })
+		BLUE_WEBP = await createTestWebP(100, 100, { r: 0, g: 0, b: 255 })
+		GREEN_WEBP = await createTestWebP(100, 100, { r: 0, g: 255, b: 0 })
 		ANIMATED_WEBP = await createAnimatedWebP()
 		WEBP_WITH_EXIF = await createWebPWithExif()
 	})
@@ -153,13 +149,13 @@ describe('Sticker Pack Messages', () => {
 			const stickers = Array(61)
 				.fill(null)
 				.map(() => ({
-					data: MINIMAL_PNG
+					data: RED_WEBP
 				}))
 
 			const stickerPack: StickerPack = {
 				name: 'Test Pack',
 				publisher: 'Test Publisher',
-				cover: MINIMAL_PNG,
+				cover: RED_WEBP,
 				stickers
 			}
 
@@ -170,11 +166,33 @@ describe('Sticker Pack Messages', () => {
 			)
 		})
 
+		it('does not silently pass a real PNG through as WebP', async () => {
+			const { Jimp } = await import('jimp')
+			const png = await new Jimp({ width: 8, height: 8, color: 0xff0000ff }).getBuffer('image/png')
+			const stickerPack: StickerPack = {
+				name: 'Test Pack',
+				publisher: 'Test Publisher',
+				cover: RED_WEBP,
+				stickers: [{ data: png }]
+			}
+
+			// With sharp unavailable a PNG cannot become WebP and must fail
+			// loudly (Boom 400) instead of being zipped up mislabeled.
+			await generateWAMessageContent({ stickerPack }, createMockOptions()).then(
+				result => expect(result).toBeDefined(),
+				err => {
+					expect((err as Error).message).toMatch(/No image processing library/)
+					expect(err).toBeInstanceOf(Boom)
+					expect((err as Boom).output.statusCode).toBe(400)
+				}
+			)
+		})
+
 		it('should reject empty sticker pack', async () => {
 			const stickerPack: StickerPack = {
 				name: 'Test Pack',
 				publisher: 'Test Publisher',
-				cover: MINIMAL_PNG,
+				cover: RED_WEBP,
 				stickers: []
 			}
 
@@ -192,7 +210,7 @@ describe('Sticker Pack Messages', () => {
 			const stickerPack: StickerPack = {
 				name: 'Test Pack',
 				publisher: 'Test Publisher',
-				cover: MINIMAL_PNG,
+				cover: RED_WEBP,
 				stickers: [{ data: largeSticker }]
 			}
 
@@ -205,8 +223,8 @@ describe('Sticker Pack Messages', () => {
 			const stickerPack: StickerPack = {
 				name: 'Test Pack',
 				publisher: 'Test Publisher',
-				cover: MINIMAL_PNG,
-				stickers: [{ data: MINIMAL_PNG }, { data: MINIMAL_PNG }, { data: MINIMAL_PNG }]
+				cover: RED_WEBP,
+				stickers: [{ data: RED_WEBP }, { data: RED_WEBP }, { data: RED_WEBP }]
 			}
 
 			const options = createMockOptions()
@@ -223,13 +241,13 @@ describe('Sticker Pack Messages', () => {
 			const stickers = Array(60)
 				.fill(null)
 				.map(() => ({
-					data: MINIMAL_PNG
+					data: RED_WEBP
 				}))
 
 			const stickerPack: StickerPack = {
 				name: 'Max Pack',
 				publisher: 'Test Publisher',
-				cover: MINIMAL_PNG,
+				cover: RED_WEBP,
 				stickers
 			}
 
@@ -247,10 +265,10 @@ describe('Sticker Pack Messages', () => {
 			const stickerPack: StickerPack = {
 				name: 'ZIP Test Pack',
 				publisher: 'Test Publisher',
-				cover: MINIMAL_PNG,
+				cover: RED_WEBP,
 				stickers: [
-					{ data: MINIMAL_PNG, emojis: ['😀'] },
-					{ data: MINIMAL_PNG, emojis: ['😎'] }
+					{ data: RED_WEBP, emojis: ['😀'] },
+					{ data: RED_WEBP, emojis: ['😎'] }
 				]
 			}
 
@@ -274,8 +292,8 @@ describe('Sticker Pack Messages', () => {
 			const stickerPack: StickerPack = {
 				name: 'Dedup Test Pack',
 				publisher: 'Test Publisher',
-				cover: MINIMAL_PNG,
-				stickers: [{ data: MINIMAL_PNG }, { data: MINIMAL_PNG }]
+				cover: RED_WEBP,
+				stickers: [{ data: RED_WEBP }, { data: RED_WEBP }]
 			}
 
 			const options = createMockOptions()
@@ -293,8 +311,8 @@ describe('Sticker Pack Messages', () => {
 			const stickerPack: StickerPack = {
 				name: 'Test Pack',
 				publisher: 'Test Publisher',
-				cover: MINIMAL_PNG,
-				stickers: [{ data: MINIMAL_PNG }],
+				cover: RED_WEBP,
+				stickers: [{ data: RED_WEBP }],
 				packId: 'custom-pack-id-123'
 			}
 
@@ -309,8 +327,8 @@ describe('Sticker Pack Messages', () => {
 			const stickerPack: StickerPack = {
 				name: 'Test Pack',
 				publisher: 'Test Publisher',
-				cover: MINIMAL_PNG,
-				stickers: [{ data: MINIMAL_PNG }]
+				cover: RED_WEBP,
+				stickers: [{ data: RED_WEBP }]
 			}
 
 			const options = createMockOptions()
@@ -325,8 +343,8 @@ describe('Sticker Pack Messages', () => {
 			const stickerPack: StickerPack = {
 				name: 'Test Pack',
 				publisher: 'Test Publisher',
-				cover: MINIMAL_PNG,
-				stickers: [{ data: MINIMAL_PNG }],
+				cover: RED_WEBP,
+				stickers: [{ data: RED_WEBP }],
 				description: 'A test sticker pack description'
 			}
 
@@ -341,10 +359,10 @@ describe('Sticker Pack Messages', () => {
 			const stickerPack: StickerPack = {
 				name: 'Accessible Pack',
 				publisher: 'Test Publisher',
-				cover: MINIMAL_PNG,
+				cover: RED_WEBP,
 				stickers: [
 					{
-						data: MINIMAL_PNG,
+						data: RED_WEBP,
 						emojis: ['🎉', '🥳'],
 						accessibilityLabel: 'Party celebration sticker'
 					}
@@ -366,7 +384,7 @@ describe('Sticker Pack Messages', () => {
 			const stickerPack: StickerPack = {
 				name: 'Test Pack',
 				publisher: 'Test Publisher',
-				cover: MINIMAL_PNG,
+				cover: RED_WEBP,
 				stickers: []
 			}
 
@@ -387,8 +405,8 @@ describe('Sticker Pack Messages', () => {
 			const stickerPack: StickerPack = {
 				name: 'Test Pack',
 				publisher: 'Test Publisher',
-				cover: MINIMAL_PNG,
-				stickers: [{ data: MINIMAL_PNG }]
+				cover: RED_WEBP,
+				stickers: [{ data: RED_WEBP }]
 			}
 
 			const options = createMockOptions()
@@ -400,28 +418,31 @@ describe('Sticker Pack Messages', () => {
 	})
 
 	describe('Media Uploads', () => {
-		it('should call upload twice - once for ZIP and once for thumbnail', async () => {
+		it('uploads only the ZIP when the cover cannot be decoded for a thumbnail', async () => {
 			const stickerPack: StickerPack = {
 				name: 'Upload Test Pack',
 				publisher: 'Test Publisher',
-				cover: MINIMAL_PNG,
-				stickers: [{ data: MINIMAL_PNG }]
+				cover: RED_WEBP,
+				stickers: [{ data: RED_WEBP }]
 			}
 
 			const options = createMockOptions()
 
 			await generateWAMessageContent({ stickerPack }, options)
 
-			// Should have 2 upload calls: ZIP and thumbnail
-			expect(options.uploadCalls).toHaveLength(2)
+			// The synthetic WebP cover is not decodable by Jimp (the only image
+			// library available here), so no thumbnail is uploaded rather than
+			// a synthesized blank one.
+			expect(options.uploadCalls).toHaveLength(1)
+			expect(options.uploadCalls[0]?.mediaType).toBe('sticker-pack')
 		})
 
 		it('should upload ZIP with sticker-pack media type', async () => {
 			const stickerPack: StickerPack = {
 				name: 'Media Type Test',
 				publisher: 'Test Publisher',
-				cover: MINIMAL_PNG,
-				stickers: [{ data: MINIMAL_PNG }]
+				cover: RED_WEBP,
+				stickers: [{ data: RED_WEBP }]
 			}
 
 			const options = createMockOptions()
@@ -432,20 +453,19 @@ describe('Sticker Pack Messages', () => {
 			expect(options.uploadCalls[0]?.mediaType).toBe('sticker-pack')
 		})
 
-		it('should upload thumbnail with thumbnail-sticker-pack media type', async () => {
+		it('does not upload a thumbnail for an undecodable cover', async () => {
 			const stickerPack: StickerPack = {
 				name: 'Thumbnail Media Type Test',
 				publisher: 'Test Publisher',
-				cover: MINIMAL_PNG,
-				stickers: [{ data: MINIMAL_PNG }]
+				cover: RED_WEBP,
+				stickers: [{ data: RED_WEBP }]
 			}
 
 			const options = createMockOptions()
 
 			await generateWAMessageContent({ stickerPack }, options)
 
-			// Second upload should be the thumbnail
-			expect(options.uploadCalls[1]?.mediaType).toBe('thumbnail-sticker-pack')
+			expect(options.uploadCalls.some(call => call.mediaType === 'thumbnail-sticker-pack')).toBe(false)
 		})
 	})
 
@@ -454,8 +474,8 @@ describe('Sticker Pack Messages', () => {
 			const stickerPack: StickerPack = {
 				name: 'Crypto Test Pack',
 				publisher: 'Test Publisher',
-				cover: MINIMAL_PNG,
-				stickers: [{ data: MINIMAL_PNG }]
+				cover: RED_WEBP,
+				stickers: [{ data: RED_WEBP }]
 			}
 
 			const options = createMockOptions()
@@ -471,8 +491,8 @@ describe('Sticker Pack Messages', () => {
 			const stickerPack: StickerPack = {
 				name: 'Hash Test Pack',
 				publisher: 'Test Publisher',
-				cover: MINIMAL_PNG,
-				stickers: [{ data: MINIMAL_PNG }]
+				cover: RED_WEBP,
+				stickers: [{ data: RED_WEBP }]
 			}
 
 			const options = createMockOptions()
@@ -489,8 +509,8 @@ describe('Sticker Pack Messages', () => {
 			const stickerPack: StickerPack = {
 				name: 'File Length Test',
 				publisher: 'Test Publisher',
-				cover: MINIMAL_PNG,
-				stickers: [{ data: MINIMAL_PNG }]
+				cover: RED_WEBP,
+				stickers: [{ data: RED_WEBP }]
 			}
 
 			const options = createMockOptions()
@@ -506,8 +526,8 @@ describe('Sticker Pack Messages', () => {
 			const stickerPack: StickerPack = {
 				name: 'Direct Path Test',
 				publisher: 'Test Publisher',
-				cover: MINIMAL_PNG,
-				stickers: [{ data: MINIMAL_PNG }]
+				cover: RED_WEBP,
+				stickers: [{ data: RED_WEBP }]
 			}
 
 			const options = createMockOptions()
@@ -523,8 +543,8 @@ describe('Sticker Pack Messages', () => {
 			const stickerPack: StickerPack = {
 				name: 'Timestamp Test',
 				publisher: 'Test Publisher',
-				cover: MINIMAL_PNG,
-				stickers: [{ data: MINIMAL_PNG }]
+				cover: RED_WEBP,
+				stickers: [{ data: RED_WEBP }]
 			}
 
 			const options = createMockOptions()
@@ -541,41 +561,35 @@ describe('Sticker Pack Messages', () => {
 	})
 
 	describe('Thumbnail Fields', () => {
-		it('should set thumbnail fields when cover is provided', async () => {
+		it('leaves thumbnail fields unset when the cover cannot be decoded', async () => {
 			const stickerPack: StickerPack = {
 				name: 'Thumbnail Fields Test',
 				publisher: 'Test Publisher',
-				cover: MINIMAL_PNG,
-				stickers: [{ data: MINIMAL_PNG }]
+				cover: RED_WEBP,
+				stickers: [{ data: RED_WEBP }]
 			}
 
 			const options = createMockOptions()
 
 			const result = await generateWAMessageContent({ stickerPack }, options)
 
-			expect(result.stickerPackMessage?.thumbnailDirectPath).toBe('/test/path/2')
-			expect(result.stickerPackMessage?.thumbnailSha256).toBeDefined()
-			expect(result.stickerPackMessage?.thumbnailEncSha256).toBeDefined()
-			expect(result.stickerPackMessage?.thumbnailHeight).toBe(252)
-			expect(result.stickerPackMessage?.thumbnailWidth).toBe(252)
+			expect(result.stickerPackMessage?.thumbnailDirectPath).toBeUndefined()
+			expect(result.stickerPackMessage?.thumbnailSha256).toBeUndefined()
 		})
 
-		it('should set imageDataHash for thumbnail', async () => {
+		it('does not set imageDataHash when no thumbnail was generated', async () => {
 			const stickerPack: StickerPack = {
 				name: 'Image Data Hash Test',
 				publisher: 'Test Publisher',
-				cover: MINIMAL_PNG,
-				stickers: [{ data: MINIMAL_PNG }]
+				cover: RED_WEBP,
+				stickers: [{ data: RED_WEBP }]
 			}
 
 			const options = createMockOptions()
 
 			const result = await generateWAMessageContent({ stickerPack }, options)
 
-			expect(result.stickerPackMessage?.imageDataHash).toBeDefined()
-			expect(typeof result.stickerPackMessage?.imageDataHash).toBe('string')
-			// imageDataHash should be base64 encoded
-			expect(result.stickerPackMessage?.imageDataHash?.length).toBeGreaterThan(0)
+			expect(result.stickerPackMessage?.imageDataHash).toBeUndefined()
 		})
 	})
 
@@ -584,8 +598,8 @@ describe('Sticker Pack Messages', () => {
 			const stickerPack: StickerPack = {
 				name: 'Tray Icon Test',
 				publisher: 'Test Publisher',
-				cover: MINIMAL_PNG,
-				stickers: [{ data: MINIMAL_PNG }],
+				cover: RED_WEBP,
+				stickers: [{ data: RED_WEBP }],
 				packId: 'my-custom-pack'
 			}
 
@@ -600,8 +614,8 @@ describe('Sticker Pack Messages', () => {
 			const stickerPack: StickerPack = {
 				name: 'Auto Tray Icon Test',
 				publisher: 'Test Publisher',
-				cover: MINIMAL_PNG,
-				stickers: [{ data: MINIMAL_PNG }]
+				cover: RED_WEBP,
+				stickers: [{ data: RED_WEBP }]
 			}
 
 			const options = createMockOptions()
@@ -620,8 +634,8 @@ describe('Sticker Pack Messages', () => {
 			const stickerPack: StickerPack = {
 				name: 'Origin Test Pack',
 				publisher: 'Test Publisher',
-				cover: MINIMAL_PNG,
-				stickers: [{ data: MINIMAL_PNG }]
+				cover: RED_WEBP,
+				stickers: [{ data: RED_WEBP }]
 			}
 
 			const options = createMockOptions()
@@ -639,8 +653,8 @@ describe('Sticker Pack Messages', () => {
 			const stickerPack: StickerPack = {
 				name: 'Pack Size Test',
 				publisher: 'Test Publisher',
-				cover: MINIMAL_PNG,
-				stickers: [{ data: MINIMAL_PNG }]
+				cover: RED_WEBP,
+				stickers: [{ data: RED_WEBP }]
 			}
 
 			const options = createMockOptions()
@@ -660,11 +674,11 @@ describe('Sticker Pack Messages', () => {
 			const stickerPack: StickerPack = {
 				name: 'Different Hash Test',
 				publisher: 'Test Publisher',
-				cover: MINIMAL_PNG,
+				cover: RED_WEBP,
 				stickers: [
-					{ data: MINIMAL_PNG }, // Red
-					{ data: BLUE_PNG }, // Blue
-					{ data: GREEN_PNG } // Green
+					{ data: RED_WEBP }, // Red
+					{ data: BLUE_WEBP }, // Blue
+					{ data: GREEN_WEBP } // Green
 				]
 			}
 
@@ -687,8 +701,8 @@ describe('Sticker Pack Messages', () => {
 			const stickerPack: StickerPack = {
 				name: 'PNG Conversion Test',
 				publisher: 'Test Publisher',
-				cover: MINIMAL_PNG,
-				stickers: [{ data: MINIMAL_PNG }]
+				cover: RED_WEBP,
+				stickers: [{ data: RED_WEBP }]
 			}
 
 			const options = createMockOptions()
@@ -721,11 +735,11 @@ describe('Sticker Pack Messages', () => {
 			const stickerPack: StickerPack = {
 				name: 'Multi Emoji Test',
 				publisher: 'Test Publisher',
-				cover: MINIMAL_PNG,
+				cover: RED_WEBP,
 				stickers: [
-					{ data: MINIMAL_PNG, emojis: ['😀', '😃'] },
-					{ data: BLUE_PNG, emojis: ['💙'] },
-					{ data: GREEN_PNG, emojis: ['💚', '🌿', '🍀'] }
+					{ data: RED_WEBP, emojis: ['😀', '😃'] },
+					{ data: BLUE_WEBP, emojis: ['💙'] },
+					{ data: GREEN_WEBP, emojis: ['💚', '🌿', '🍀'] }
 				]
 			}
 
@@ -743,11 +757,11 @@ describe('Sticker Pack Messages', () => {
 			const stickerPack: StickerPack = {
 				name: 'Order Test',
 				publisher: 'Test Publisher',
-				cover: MINIMAL_PNG,
+				cover: RED_WEBP,
 				stickers: [
-					{ data: MINIMAL_PNG, accessibilityLabel: 'First' },
-					{ data: BLUE_PNG, accessibilityLabel: 'Second' },
-					{ data: GREEN_PNG, accessibilityLabel: 'Third' }
+					{ data: RED_WEBP, accessibilityLabel: 'First' },
+					{ data: BLUE_WEBP, accessibilityLabel: 'Second' },
+					{ data: GREEN_WEBP, accessibilityLabel: 'Third' }
 				]
 			}
 
@@ -767,7 +781,7 @@ describe('Sticker Pack Messages', () => {
 			const stickerPack: StickerPack = {
 				name: 'Animated Test Pack',
 				publisher: 'Test Publisher',
-				cover: MINIMAL_PNG,
+				cover: RED_WEBP,
 				stickers: [{ data: ANIMATED_WEBP }]
 			}
 
@@ -782,7 +796,7 @@ describe('Sticker Pack Messages', () => {
 			const stickerPack: StickerPack = {
 				name: 'Static Test Pack',
 				publisher: 'Test Publisher',
-				cover: MINIMAL_PNG,
+				cover: RED_WEBP,
 				stickers: [{ data: MINIMAL_WEBP }]
 			}
 
@@ -797,8 +811,8 @@ describe('Sticker Pack Messages', () => {
 			const stickerPack: StickerPack = {
 				name: 'Converted PNG Test',
 				publisher: 'Test Publisher',
-				cover: MINIMAL_PNG,
-				stickers: [{ data: MINIMAL_PNG }]
+				cover: RED_WEBP,
+				stickers: [{ data: RED_WEBP }]
 			}
 
 			const options = createMockOptions()
@@ -812,11 +826,11 @@ describe('Sticker Pack Messages', () => {
 			const stickerPack: StickerPack = {
 				name: 'Mixed Animation Test',
 				publisher: 'Test Publisher',
-				cover: MINIMAL_PNG,
+				cover: RED_WEBP,
 				stickers: [
 					{ data: ANIMATED_WEBP, accessibilityLabel: 'animated' },
 					{ data: MINIMAL_WEBP, accessibilityLabel: 'static' },
-					{ data: MINIMAL_PNG, accessibilityLabel: 'converted' }
+					{ data: RED_WEBP, accessibilityLabel: 'converted' }
 				]
 			}
 
@@ -876,7 +890,7 @@ describe('Sticker Pack Messages', () => {
 				name: 'Cover Preservation Test',
 				publisher: 'Test Publisher',
 				cover: WEBP_WITH_EXIF, // WebP cover should be preserved
-				stickers: [{ data: MINIMAL_PNG }]
+				stickers: [{ data: RED_WEBP }]
 			}
 
 			const options = createMockOptions()

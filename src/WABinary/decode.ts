@@ -7,8 +7,12 @@ import type { BinaryNode, BinaryNodeCodingOptions } from './types'
 const inflatePromise = promisify(inflate)
 
 export const decompressingIfRequired = async (buffer: Buffer) => {
+	if (!buffer.length) {
+		return buffer
+	}
+
 	if (2 & buffer.readUInt8()) {
-		buffer = await inflatePromise(buffer.slice(1))
+		buffer = await inflatePromise(buffer.slice(1), { maxOutputLength: 64 * 1024 * 1024 })
 	} else {
 		// nodes with no compression have a 0x00 prefix, we remove that
 		buffer = buffer.slice(1)
@@ -20,7 +24,7 @@ export const decompressingIfRequired = async (buffer: Buffer) => {
 export const decodeDecompressedBinaryNode = (
 	buffer: Buffer,
 	opts: Pick<BinaryNodeCodingOptions, 'DOUBLE_BYTE_TOKENS' | 'SINGLE_BYTE_TOKENS' | 'TAGS'>,
-	indexRef: { index: number } = { index: 0 }
+	indexRef: { index: number; depth?: number } = { index: 0 }
 ): BinaryNode => {
 	const { DOUBLE_BYTE_TOKENS, SINGLE_BYTE_TOKENS, TAGS } = opts
 
@@ -60,7 +64,7 @@ export const decodeDecompressedBinaryNode = (
 			val |= next()! << (shift * 8)
 		}
 
-		return val
+		return val >>> 0
 	}
 
 	const readInt20 = () => {
@@ -226,13 +230,23 @@ export const decodeDecompressedBinaryNode = (
 	}
 
 	const readList = (tag: number) => {
-		const items: BinaryNode[] = []
-		const size = readListSize(tag)!
-		for (let i = 0; i < size; i++) {
-			items.push(decodeDecompressedBinaryNode(buffer, opts, indexRef))
+		const depth = (indexRef.depth ?? 0) + 1
+		if (depth > 100) {
+			throw new Error('binary node nesting too deep')
 		}
 
-		return items
+		indexRef.depth = depth
+		try {
+			const items: BinaryNode[] = []
+			const size = readListSize(tag)!
+			for (let i = 0; i < size; i++) {
+				items.push(decodeDecompressedBinaryNode(buffer, opts, indexRef))
+			}
+
+			return items
+		} finally {
+			indexRef.depth = depth - 1
+		}
 	}
 
 	const getTokenDouble = (index1: number, index2: number) => {

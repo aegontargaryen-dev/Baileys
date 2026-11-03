@@ -25,7 +25,7 @@ export const getBinaryNodeChildren = (node: BinaryNode | undefined, childTag: st
 	}
 
 	// Return first matching child
-	return index.get(childTag) || []
+	return index.get(childTag)?.slice() || []
 }
 
 export const getBinaryNodeChild = (node: BinaryNode | undefined, childTag: string) => {
@@ -68,8 +68,8 @@ export const assertNodeErrorFree = (node: BinaryNode) => {
 	if (errNode) {
 		const code = +errNode.attrs.code!
 		throw new Boom(errNode.attrs.text || 'Unknown error', {
-			data: code,
-			statusCode: !Number.isNaN(code) && code >= 400 ? code : undefined
+			data: Number.isNaN(code) ? undefined : code,
+			statusCode: !Number.isNaN(code) && code >= 400 && code <= 599 ? code : undefined
 		})
 	}
 }

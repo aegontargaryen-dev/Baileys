@@ -2,7 +2,37 @@ import { Boom } from '@hapi/boom'
 import { randomBytes } from 'crypto'
 import { promises as fs } from 'fs'
 import { type Transform } from 'stream'
-import { crc32 } from 'zlib'
+import { crc32 as zlibCrc32 } from 'zlib'
+
+// zlib.crc32 only exists on Node >= 20.15 / 22.2, but engines allows
+// Node >= 20.0.0; fall back to a table implementation there.
+const CRC32_TABLE = (() => {
+	const table = new Uint32Array(256)
+	for (let i = 0; i < 256; i++) {
+		let c = i
+		for (let k = 0; k < 8; k++) {
+			c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
+		}
+
+		table[i] = c >>> 0
+	}
+
+	return table
+})()
+
+const crc32 = (data: Buffer): number => {
+	if (typeof zlibCrc32 === 'function') {
+		return zlibCrc32(data)
+	}
+
+	let crc = 0xffffffff
+	for (const byte of data) {
+		crc = CRC32_TABLE[(crc ^ byte) & 0xff]! ^ (crc >>> 8)
+	}
+
+	return (crc ^ 0xffffffff) >>> 0
+}
+
 import { proto } from '../../WAProto/index.js'
 import {
 	CALL_AUDIO_PREFIX,
@@ -29,7 +59,16 @@ import type {
 	WATextMessage
 } from '../Types'
 import { WAMessageStatus, WAProto } from '../Types'
-import { isJidGroup, isJidNewsletter, isJidStatusBroadcast, jidNormalizedUser } from '../WABinary'
+import {
+	isHostedLidUser,
+	isHostedPnUser,
+	isJidGroup,
+	isJidNewsletter,
+	isJidStatusBroadcast,
+	isLidUser,
+	isPnUser,
+	jidNormalizedUser
+} from '../WABinary'
 import { aesEncryptGCM, hmacSign, sha256 } from './crypto'
 import { generateMessageIDV2, getKeyAuthor, unixTimestampSeconds } from './generics'
 import type { ILogger } from './logger'
@@ -157,7 +196,7 @@ export const prepareWAMessageMedia = async (
 		'url' in uploadData.media &&
 		!!uploadData.media.url &&
 		!!options.mediaCache &&
-		`${isNewsletter ? 'newsletter:' : ''}${isPtv ? 'ptv' : mediaType}:${uploadData.media.url.toString()}`
+		`${isNewsletter ? 'newsletter:' : ''}${isPtv ? 'ptv' : mediaType}:${options.mediaTypeOverride || ''}:${uploadData.gifPlayback ? 'gif' : ''}:${uploadData.ptt ? 'ptt' : ''}:${uploadData.media.url.toString()}`
 
 	if (mediaType === 'document' && !uploadData.fileName) {
 		uploadData.fileName = 'file'
@@ -393,10 +432,12 @@ export const generateForwardMessageContent = (message: WAMessage, forceForward?:
 	}
 
 	const key_ = content?.[key] as { contextInfo: proto.IContextInfo }
+	// A forward must not carry the original quote, mentions or ephemeral
+	// settings into the new chat; only the forwarding markers survive.
 	if (score > 0) {
-		key_.contextInfo = { ...key_.contextInfo, forwardingScore: score, isForwarded: true }
+		key_.contextInfo = { forwardingScore: score, isForwarded: true }
 	} else {
-		key_.contextInfo = { ...key_.contextInfo }
+		key_.contextInfo = {}
 	}
 
 	return content
@@ -626,9 +667,21 @@ export const generateWAMessageContent = async (
 			['pollCreatorJid', pollCreatorJid],
 			['voterJid', voterJid]
 		] as const) {
-			if (!value || jidNormalizedUser(value) !== value) {
+			if (
+				!value ||
+				jidNormalizedUser(value) !== value ||
+				!(isPnUser(value) || isLidUser(value) || isHostedPnUser(value) || isHostedLidUser(value))
+			) {
 				throw new Boom(`pollVote.${field} must be a JID without device, got ${value}`, { statusCode: 400 })
 			}
+		}
+
+		if (!(pollEncKey instanceof Uint8Array) || pollEncKey.length !== 32) {
+			throw new Boom('pollVote.pollEncKey must be a 32-byte Uint8Array', { statusCode: 400 })
+		}
+
+		if (!Array.isArray(selectedOptions)) {
+			throw new Boom('pollVote.selectedOptions must be an array', { statusCode: 400 })
 		}
 
 		m.pollUpdateMessage = {
@@ -1249,17 +1302,22 @@ export const downloadMediaMessage = async <Type extends 'buffer' | 'stream'>(
 		}
 
 		let download: DownloadableMessage
-		if ('thumbnailDirectPath' in media && !('url' in media) && !('directPath' in media)) {
+		const downloadable = media as DownloadableMessage & { thumbnailDirectPath?: string | null }
+		if (downloadable.thumbnailDirectPath && !downloadable.url && !downloadable.directPath) {
 			download = {
-				directPath: media.thumbnailDirectPath,
-				mediaKey: media.mediaKey
+				directPath: downloadable.thumbnailDirectPath,
+				mediaKey: downloadable.mediaKey
 			}
 			mediaType = 'thumbnail-link'
 		} else {
-			download = media
+			download = media as DownloadableMessage
 		}
 
-		const stream = await downloadContentFromMessage(download, mediaType, options)
+		const stream = await downloadContentFromMessage(download, mediaType, {
+			// Newsletter media is served unencrypted and carries no mediaKey.
+			allowPlaintext: isJidNewsletter(message.key.remoteJid ?? undefined),
+			...options
+		})
 		if (type === 'buffer') {
 			const bufferArray: Buffer[] = []
 			for await (const chunk of stream) {
@@ -1425,6 +1483,11 @@ export function readStoredZip(zipBuf: Uint8Array): Record<string, Uint8Array> {
 	const result: Record<string, Uint8Array> = {}
 	let offset = 0
 	while (offset + 30 <= buf.length && buf.readUInt32LE(offset) === 0x04034b50) {
+		// Only stored (method 0) entries can be read back as raw bytes.
+		if (buf.readUInt16LE(offset + 8) !== 0) {
+			break
+		}
+
 		const compressedSize = buf.readUInt32LE(offset + 18)
 		const nameLen = buf.readUInt16LE(offset + 26)
 		const extraLen = buf.readUInt16LE(offset + 28)
@@ -1481,7 +1544,8 @@ async function prepareStickerPackMessage(
 			isAnimated = false
 		} else {
 			throw new Boom(
-				'No image processing library (sharp) available for converting sticker to WebP. Either install sharp or provide stickers in WebP format.'
+				'No image processing library (sharp) available for converting sticker to WebP. Either install sharp or provide stickers in WebP format.',
+				{ statusCode: 400 }
 			)
 		}
 
@@ -1489,7 +1553,7 @@ async function prepareStickerPackMessage(
 			throw new Boom(`Sticker at index ${i} exceeds the 1MB size limit`, { statusCode: 400 })
 		}
 
-		const hash = sha256(webpBuffer).toString('base64').replace(/\//g, '-')
+		const hash = sha256(webpBuffer).toString('base64url')
 		const fileName = `${hash}.webp`
 		stickerData[fileName] = new Uint8Array(webpBuffer)
 		return {
@@ -1571,13 +1635,10 @@ async function prepareStickerPackMessage(
 		if ('sharp' in lib && lib.sharp) {
 			thumbnailBuffer = await lib.sharp.default(coverBuffer).resize(252, 252).jpeg().toBuffer()
 		} else if ('jimp' in lib && lib.jimp) {
-			try {
-				const jimpImage = await lib.jimp.Jimp.read(coverBuffer)
-				thumbnailBuffer = await jimpImage.resize({ w: 252, h: 252 }).getBuffer('image/jpeg')
-			} catch {
-				const fallbackImage = new lib.jimp.Jimp({ width: 252, height: 252, color: 0xffffffff })
-				thumbnailBuffer = await fallbackImage.getBuffer('image/jpeg')
-			}
+			// Never synthesize a blank thumbnail: a corrupt cover must
+			// surface as an error, not as a white square in the pack.
+			const jimpImage = await lib.jimp.Jimp.read(coverBuffer)
+			thumbnailBuffer = await jimpImage.resize({ w: 252, h: 252 }).getBuffer('image/jpeg')
 		} else {
 			throw new Error('No image processing library available for thumbnail generation')
 		}

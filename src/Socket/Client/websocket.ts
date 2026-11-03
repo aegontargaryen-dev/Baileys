@@ -19,9 +19,11 @@ export class WebSocketClient extends AbstractSocketClient {
 	}
 
 	connect() {
-		if (this.socket) {
+		if (this.socket && this.socket.readyState !== WebSocket.CLOSED) {
 			return
 		}
+
+		this.socket = null
 
 		this.socket = new WebSocket(this.url, {
 			origin: DEFAULT_ORIGIN,
@@ -50,15 +52,29 @@ export class WebSocketClient extends AbstractSocketClient {
 			return
 		}
 
+		const socket = this.socket
 		const closePromise = new Promise<void>(resolve => {
-			this.socket?.once('close', resolve)
+			socket.once('close', resolve)
 		})
 
-		this.socket.close()
+		socket.close()
 
-		await closePromise
+		let timer: NodeJS.Timeout | undefined
+		const timedOut = await Promise.race([
+			closePromise.then(() => false),
+			new Promise<boolean>(resolve => {
+				timer = setTimeout(() => resolve(true), 5_000)
+			})
+		])
+		clearTimeout(timer)
+		if (timedOut) {
+			socket.terminate()
+			await closePromise.catch(() => {})
+		}
 
-		this.socket = null
+		if (this.socket === socket) {
+			this.socket = null
+		}
 	}
 	send(str: string | Uint8Array, cb?: (err?: Error) => void): boolean {
 		this.socket?.send(str, cb)

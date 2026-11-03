@@ -1,6 +1,7 @@
 import { LRUCache } from 'lru-cache'
 import type { proto } from '../../WAProto/index.js'
 import type { AnyMessageContent } from '../Types/Message'
+import { jidNormalizedUser } from '../WABinary'
 import type { ILogger } from './logger'
 import { makeKeyedMutex } from './make-mutex'
 
@@ -56,28 +57,41 @@ export class MessageRetryCoordinator {
 		ttl: 5 * 60 * 1000,
 		ttlAutopurge: true
 	})
+	// A message sent to a PN JID may be relayed (and retried) under its LID
+	// alias, so an edit/revoke keyed by the app-supplied PN must also cancel
+	// retries keyed by the LID form of the same message id.
+	private invalidatedMessageIds = new LRUCache<string, true>({
+		max: RECENT_MESSAGES_SIZE,
+		ttl: 5 * 60 * 1000,
+		ttlAutopurge: true
+	})
 	private preparedRetries = new Map<string, Set<{ cancelled: boolean }>>()
 	private mutex = makeKeyedMutex()
 
 	private key(to: string, id: string): string {
-		return `${to}${MESSAGE_KEY_SEPARATOR}${id}`
+		return `${jidNormalizedUser(to)}${MESSAGE_KEY_SEPARATOR}${id}`
 	}
 
 	invalidateMessage(to: string, id: string): void {
 		const key = this.key(to, id)
 		this.invalidatedMessages.set(key, true)
-		for (const retry of this.preparedRetries.get(key) ?? []) {
-			retry.cancelled = true
+		this.invalidatedMessageIds.set(id, true)
+		for (const [retryKey, retries] of this.preparedRetries) {
+			if (retryKey === key || retryKey.endsWith(`${MESSAGE_KEY_SEPARATOR}${id}`)) {
+				for (const retry of retries) {
+					retry.cancelled = true
+				}
+			}
 		}
 	}
 
 	isMessageInvalidated(to: string, id: string): boolean {
-		return this.invalidatedMessages.has(this.key(to, id))
+		return this.invalidatedMessages.has(this.key(to, id)) || this.invalidatedMessageIds.has(id)
 	}
 
 	prepareRetry(to: string, id: string): PreparedMessageRetry {
 		const key = this.key(to, id)
-		const retry = { cancelled: this.invalidatedMessages.has(key) }
+		const retry = { cancelled: this.isMessageInvalidated(to, id) }
 		const retries = this.preparedRetries.get(key) ?? new Set<{ cancelled: boolean }>()
 		retries.add(retry)
 		this.preparedRetries.set(key, retries)
@@ -97,7 +111,10 @@ export class MessageRetryCoordinator {
 	}
 
 	withMessageLock<T>(to: string, id: string, task: () => Promise<T> | T): Promise<T> {
-		return this.mutex.mutex(this.key(to, id), task)
+		// Lock by message id so a PN-keyed edit/revoke serializes with a
+		// LID-keyed retry of the same message (see invalidatedMessageIds).
+		void to
+		return this.mutex.mutex(id, task)
 	}
 
 	withMessageLocks<T>(to: string, ids: string[], task: () => Promise<T> | T): Promise<T> {
@@ -118,6 +135,7 @@ export class MessageRetryCoordinator {
 		}
 
 		this.invalidatedMessages.clear()
+		this.invalidatedMessageIds.clear()
 		this.preparedRetries.clear()
 	}
 }
@@ -433,7 +451,7 @@ export class MessageRetryManager {
 	}
 
 	private keyToString(key: RecentMessageKey): string {
-		return `${key.to}${MESSAGE_KEY_SEPARATOR}${key.id}`
+		return `${jidNormalizedUser(key.to)}${MESSAGE_KEY_SEPARATOR}${key.id}`
 	}
 
 	private retryKey(messageId: string, to?: string): string {
@@ -442,7 +460,16 @@ export class MessageRetryManager {
 
 	/** Remove one exact destination/message pair from the retry cache. */
 	removeRecentMessage(to: string, messageId: string): boolean {
-		return this.recentMessagesMap.delete(this.keyToString({ to, id: messageId }))
+		const removed = this.recentMessagesMap.delete(this.keyToString({ to, id: messageId }))
+		if (removed) {
+			return true
+		}
+
+		// Fall back to the id index only when unambiguous: the entry may be
+		// cached under the PN/LID alias of `to`, but custom ids can repeat
+		// across chats.
+		const indexedKeys = this.messageKeyIndex.get(messageId)
+		return indexedKeys?.size === 1 ? this.removeRecentMessagesById(messageId) : false
 	}
 
 	/** Remove one exact cache entry and mark the message unavailable for retries. */

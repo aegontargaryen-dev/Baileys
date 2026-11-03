@@ -1121,8 +1121,8 @@ describe('computeCsToken', () => {
 		const lid = '12345:67@lid'
 		const result = computeCsToken(SALT, lid)
 
-		// Verify against Node.js crypto directly
-		const expected = createHmac('sha256', SALT).update(lid, 'utf8').digest()
+		// The token is keyed by the device-less LID; verify against Node.js crypto directly
+		const expected = createHmac('sha256', SALT).update('12345@lid', 'utf8').digest()
 		expect(Buffer.from(result)).toEqual(expected)
 	})
 
@@ -1169,77 +1169,5 @@ describe('computeCsToken', () => {
 		// Should still be valid HMAC output
 		const expected = createHmac('sha256', SALT).update('', 'utf8').digest()
 		expect(Buffer.from(result)).toEqual(expected)
-	})
-})
-
-describe('cstoken fallback logic', () => {
-	const SALT = new Uint8Array(32).fill(0xab)
-	const RECIPIENT_LID = '12345:67@lid'
-	const VALID_TOKEN = Buffer.from([4, 1, 33, 254, 110, 59])
-
-	it('tctoken takes priority over cstoken when both available', () => {
-		// Simulate the fallback logic from messages-send.ts
-		const tcTokenBuffer = VALID_TOKEN
-		const nctSalt = SALT
-
-		// tctoken exists → should use it, not cstoken
-		let usedToken: { tag: string; content: Uint8Array } | null = null
-
-		if (tcTokenBuffer?.length) {
-			usedToken = { tag: 'tctoken', content: tcTokenBuffer }
-		} else if (nctSalt?.length) {
-			usedToken = { tag: 'cstoken', content: computeCsToken(nctSalt, RECIPIENT_LID) }
-		}
-
-		expect(usedToken).not.toBeNull()
-		expect(usedToken!.tag).toBe('tctoken')
-		expect(usedToken!.content).toBe(VALID_TOKEN)
-	})
-
-	it('cstoken used when tctoken is missing', () => {
-		const tcTokenBuffer = undefined as Buffer | undefined
-		const nctSalt: Uint8Array | undefined = SALT
-
-		let usedToken: { tag: string; content: Uint8Array } | null = null
-
-		if (tcTokenBuffer?.length) {
-			usedToken = { tag: 'tctoken', content: tcTokenBuffer }
-		} else if (nctSalt?.length) {
-			usedToken = { tag: 'cstoken', content: computeCsToken(nctSalt, RECIPIENT_LID) }
-		}
-
-		expect(usedToken).not.toBeNull()
-		expect(usedToken!.tag).toBe('cstoken')
-		expect(usedToken!.content.length).toBe(32)
-	})
-
-	it('no token when both tctoken and nctSalt are missing', () => {
-		const tcTokenBuffer = undefined as Buffer | undefined
-		const nctSalt = undefined as Uint8Array | undefined
-
-		let usedToken: { tag: string; content: Uint8Array } | null = null
-
-		if (tcTokenBuffer?.length) {
-			usedToken = { tag: 'tctoken', content: tcTokenBuffer }
-		} else if (nctSalt?.length) {
-			usedToken = { tag: 'cstoken', content: computeCsToken(nctSalt, RECIPIENT_LID) }
-		}
-
-		expect(usedToken).toBeNull()
-	})
-
-	it('cstoken used when tctoken is empty buffer', () => {
-		const tcTokenBuffer = Buffer.alloc(0)
-		const nctSalt = SALT
-
-		let usedToken: { tag: string; content: Uint8Array } | null = null
-
-		if (tcTokenBuffer?.length) {
-			usedToken = { tag: 'tctoken', content: tcTokenBuffer }
-		} else if (nctSalt?.length) {
-			usedToken = { tag: 'cstoken', content: computeCsToken(nctSalt, RECIPIENT_LID) }
-		}
-
-		expect(usedToken!.tag).toBe('cstoken')
 	})
 })

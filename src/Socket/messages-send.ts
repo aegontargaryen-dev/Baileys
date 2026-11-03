@@ -682,6 +682,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 	) => {
 		if (
 			jidDecode(jid)?.server === 's.whatsapp.net' &&
+			!jidDecode(jid)?.device &&
 			!participant &&
 			additionalAttributes?.['category'] !== 'peer' &&
 			!areJidsSameUser(jid, authState.creds.me?.id)
@@ -691,8 +692,8 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				if (mappedLid) {
 					jid = jidNormalizedUser(mappedLid)
 				}
-			} catch (error: any) {
-				logger.debug({ jid, err: error?.message }, 'failed to check LID mapping for PN')
+			} catch (error) {
+				logger.debug({ jid, err: error }, 'failed to check LID mapping for PN')
 			}
 		}
 
@@ -710,7 +711,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 		const isGroupOrStatus = isGroup || isStatus
 		const finalJid = jid
 
-		if (isJidMetaAI(jid)) {
+		if (isJidMetaAI(jid) || isJidBot(jid)) {
 			prepareMessageForBot(message, jid)
 		}
 
@@ -795,7 +796,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 
 			// as a phone's vote; without this node the server acks the vote but does not deliver it.
 			// Added here rather than in sendMessage so that retry resends carry it too.
-			if (isPollVote && !additionalNodes?.some(node => node.tag === 'meta')) {
+			if (isPollVote && !additionalNodes?.some(node => node.tag === 'meta' && node.attrs?.['polltype'])) {
 				additionalNodes = [
 					...(additionalNodes || []),
 					{ tag: 'meta', attrs: { polltype: 'vote', content_type: 'add_on' } }
@@ -902,6 +903,13 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 
 					const result = await createParticipantNodes(senderKeyRecipients, senderKeyMsg, extraAttrs)
 					shouldIncludeDeviceIdentity = shouldIncludeDeviceIdentity || result.shouldIncludeDeviceIdentity
+
+					// The SKDM has now been sent to these devices; forcing a
+					// resend on every group message for the full 10 minutes
+					// after an identity change is unnecessary.
+					for (const recipientJid of senderKeyRecipients) {
+						recentlyChangedIdentities.delete(jidNormalizedUser(recipientJid))
+					}
 
 					participants.push(...result.nodes)
 				}
@@ -1189,6 +1197,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				})
 			} else if (
 				is1on1Send &&
+				sock.serverProps.privacyTokenOn1to1 &&
 				authState.creds.me?.lid &&
 				authState.creds.nctSalt?.length &&
 				tcTokenJid &&
@@ -1466,6 +1475,26 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 						: disappearingMessagesInChat
 				await groupToggleEphemeral(jid, value)
 			} else {
+				// Resolve PN -> LID before the message key is created so the
+				// emitted/returned key, the wire stanza and retry receipts all
+				// name the same chat. relayMessage rewrites too, but only its
+				// local copy. Legacy PN-only accounts (no own LID) keep PN.
+				if (
+					authState.creds.me?.lid &&
+					jidDecode(jid)?.server === 's.whatsapp.net' &&
+					!jidDecode(jid)?.device &&
+					!areJidsSameUser(jid, authState.creds.me?.id)
+				) {
+					try {
+						const mappedLid = await getLIDForPN(jid)
+						if (mappedLid) {
+							jid = jidNormalizedUser(mappedLid)
+						}
+					} catch (error) {
+						logger.debug({ jid, err: error }, 'failed to check LID mapping for PN')
+					}
+				}
+
 				const fullMsg = await generateWAMessage(jid, content, {
 					logger,
 					userJid,

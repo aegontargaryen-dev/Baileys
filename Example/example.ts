@@ -79,7 +79,7 @@ const startSock = async() => {
 					// reconnect if not logged out
 					if((lastDisconnect?.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut) {
 						// A 515 restartRequired close after first pairing is expected; reconnect with saved creds.
-						startSock()
+						startSock().catch(err => console.error(err))
 					} else {
 						logger.fatal('Connection closed. You are logged out.')
 					}
@@ -237,4 +237,4 @@ const startSock = async() => {
 	}
 }
 
-startSock()
+startSock().catch(err => console.error(err))

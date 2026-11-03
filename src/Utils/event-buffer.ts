@@ -90,6 +90,13 @@ export const makeEventBuffer = (logger: ILogger): BaileysBufferableEventEmitter 
 	})
 
 	function buffer() {
+		// A debounced flush scheduled by a finished buffered function must
+		// not fire inside this new buffering session.
+		if (flushPendingTimeout) {
+			clearTimeout(flushPendingTimeout)
+			flushPendingTimeout = null
+		}
+
 		if (!isBuffering) {
 			logger.debug('Event buffer activated')
 			isBuffering = true
@@ -219,7 +226,12 @@ export const makeEventBuffer = (logger: ILogger): BaileysBufferableEventEmitter 
 					if (isBuffering && bufferCount === 0) {
 						// Only schedule ONE timeout, not 10,000
 						if (!flushPendingTimeout) {
-							flushPendingTimeout = setTimeout(flush, 100)
+							flushPendingTimeout = setTimeout(() => {
+								flushPendingTimeout = null
+								if (isBuffering && bufferCount === 0) {
+									flush()
+								}
+							}, 100)
 						}
 					}
 				}
@@ -417,7 +429,29 @@ function append<E extends BufferableEvent>(
 				} else if (conditionMatches === undefined) {
 					// condition yet to be fulfilled
 					const chatUpdate = data.chatUpdates[chatId] || {}
-					data.chatUpdates[chatId] = mergeChatUpdates(chatUpdate, update)
+					const previousConditional = chatUpdate.conditional
+					const merged = mergeChatUpdates(chatUpdate, update)
+					// Merging must not let the newest condition decide the
+					// fate of fields gated by an earlier one: the merged
+					// update applies only when every merged condition does.
+					if (previousConditional && update.conditional) {
+						const newConditional = update.conditional
+						merged.conditional = (conditionalData: BufferedEventData) => {
+							const previous = previousConditional(conditionalData)
+							if (previous === false) {
+								return false
+							}
+
+							const current = newConditional(conditionalData)
+							if (current === false) {
+								return false
+							}
+
+							return previous === true && current === true ? true : undefined
+						}
+					}
+
+					data.chatUpdates[chatId] = merged
 				}
 				// otherwise -- condition not met, update is invalid
 

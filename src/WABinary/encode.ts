@@ -229,10 +229,8 @@ const encodeBinaryNodeInner = (
 	writeString(tag)
 
 	for (const key of validAttributes) {
-		if (typeof attrs[key] === 'string') {
-			writeString(key)
-			writeString(attrs[key])
-		}
+		writeString(key)
+		writeString(typeof attrs[key] === 'string' ? attrs[key] : String(attrs[key]))
 	}
 
 	if (typeof content === 'string') {

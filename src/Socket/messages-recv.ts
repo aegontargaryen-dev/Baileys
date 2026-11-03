@@ -76,6 +76,7 @@ import {
 	getBinaryNodeChildren,
 	getBinaryNodeChildString,
 	getBinaryNodeChildUInt,
+	isHostedLidUser,
 	isJidBroadcast,
 	isJidGroup,
 	isJidMetaAI,
@@ -555,7 +556,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 		// carry `from`, so those cannot be sent without an identity
 		const meId = authState.creds.me?.id
 		if (node.tag === 'message' && !meId) {
-			throw new Boom('cannot ack a message before creds.me is set')
+			throw new Boom('cannot ack a message before creds.me is set', { statusCode: 401 })
 		}
 
 		const stanza = buildAckStanza(node, errorCode, meId)
@@ -1421,7 +1422,6 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 			}
 
 			const msg = msgs[index]
-			if (msg) messageRetryManager?.markRetrySuccess(id, remoteJid)
 			retryableIds.push(id)
 			retryablePreparedRetries.push(preparedRetry)
 			retryableMessages.push(msg)
@@ -1537,6 +1537,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 					}
 
 					await relayMessage(key.remoteJid!, msg, msgRelayOpts)
+					messageRetryManager?.markRetrySuccess(id, remoteJid)
 				} else {
 					logger.debug({ jid: key.remoteJid, id }, 'recv retry request, but message not available')
 				}
@@ -1561,7 +1562,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 	const handleReceipt = async (node: BinaryNode) => {
 		const { attrs, content } = node
 		const senderJid = attrs.participant || attrs.from!
-		const isLid = senderJid.includes('lid')
+		const isLid = isLidUser(senderJid) || isHostedLidUser(senderJid)
 		const isNodeFromMe = areJidsSameUser(senderJid, isLid ? authState.creds.me?.lid : authState.creds.me?.id)
 		const remoteJid = !isNodeFromMe || isJidGroup(attrs.from) ? attrs.from : attrs.recipient
 		const fromMe = !attrs.recipient || ((attrs.type === 'retry' || attrs.type === 'sender') && isNodeFromMe)

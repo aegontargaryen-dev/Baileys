@@ -104,9 +104,11 @@ export const makePairingQRRenderer = (refs: string[], render: (ref: string) => v
 				return false
 			}
 
+			// Render first: a throwing listener must not burn a
+			// server-allotted ref.
+			render(ref)
 			index += 1
 			current = ref
-			render(ref)
 			return true
 		},
 		refresh() {

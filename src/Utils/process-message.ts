@@ -298,9 +298,7 @@ async function decryptPollUpdateVote({
 		creationMsgKey.participant,
 		creationMsgKey.participantAlt,
 		!isJidGroup(creationMsgKey.remoteJid || undefined) ? creationMsgKey.remoteJid : undefined,
-		creationMsgKey.remoteJidAlt,
-		meIdNormalised,
-		meLidNormalised
+		creationMsgKey.remoteJidAlt
 	].filter((j): j is string => !!j)
 
 	const creatorCandidates = new Set<string>(rawCreatorCandidates.map(j => jidNormalizedUser(j)))
@@ -343,7 +341,7 @@ async function decryptPollUpdateVote({
 		}
 	}
 
-	let lastErr: unknown
+	let lastErr: unknown = new Boom('No poll creator/voter JID candidates for vote decryption', { statusCode: 400 })
 	for (const pollCreatorJid of creatorCandidates) {
 		for (const voterJid of voterCandidates) {
 			try {
@@ -883,7 +881,13 @@ const processMessage = async (
 		}
 	} else if (content?.pollUpdateMessage?.pollCreationMessageKey) {
 		const creationMsgKey = content.pollUpdateMessage.pollCreationMessageKey
-		const pollMsg = await getMessage(creationMsgKey)
+		let pollMsg: proto.IMessage | undefined
+		try {
+			pollMsg = await getMessage(creationMsgKey)
+		} catch (err) {
+			logger.warn({ err, creationMsgKey }, 'failed to retrieve the poll creation message for vote decryption')
+		}
+
 		if (pollMsg) {
 			try {
 				const voteMsg = await decryptPollUpdateVote({

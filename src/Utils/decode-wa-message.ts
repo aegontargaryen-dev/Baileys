@@ -7,6 +7,7 @@ import {
 	type BinaryNode,
 	isHostedLidUser,
 	isHostedPnUser,
+	isJidBot,
 	isJidBroadcast,
 	isJidGroup,
 	isJidMetaAI,
@@ -45,14 +46,14 @@ const storeMappingFromEnvelope = async (
 			await repository.migrateSession(sender, senderAlt)
 			logger.debug({ sender, senderAlt }, 'Stored LID mapping from envelope')
 		} catch (error) {
-			logger.warn({ sender, senderAlt, error }, 'Failed to store LID mapping')
+			logger.warn({ err: error }, 'Failed to store LID mapping')
 		}
 	} else if (senderAlt && isPnUser(senderAlt) && isLidUser(sender)) {
 		try {
-			await repository.lidMapping.storeLIDPNMappings?.([{ lid: sender, pn: senderAlt }])
+			await repository.lidMapping.storeLIDPNMappings([{ lid: sender, pn: senderAlt }])
 			logger.debug({ sender, senderAlt }, 'Stored LID mapping from LID-addressed envelope')
 		} catch (error) {
-			logger.warn({ sender, senderAlt, error }, 'Failed to store LID mapping')
+			logger.warn({ err: error }, 'Failed to store LID mapping')
 		}
 	}
 }
@@ -294,18 +295,18 @@ export const decryptMessageNode = (
 	// A native bot encrypts its reply with the messageSecret of the message it
 	// answers: one of ours, identified by <meta target_id>.
 	const decryptBotReplyStanza = async (content: Uint8Array) => {
-		if (!isJidMetaAI(author)) {
+		if (!isJidMetaAI(author) && !isJidBot(author)) {
 			throw new Error('msmsg from a sender that is not a bot')
 		}
 
 		const info = getBotReplyInfo(stanza)
-		const targetSenderJid = info.targetSenderJid || meLid
-		const isOwnTarget =
-			!!targetSenderJid &&
-			(isLidUser(targetSenderJid) || isHostedLidUser(targetSenderJid)
-				? areJidsSameUser(targetSenderJid, meLid)
-				: areJidsSameUser(targetSenderJid, meId))
-		if (!info.targetId || !isOwnTarget) {
+		// Without an explicit target sender the reply answers our own
+		// message; PN-only accounts have no LID, so try both identities.
+		const targetSenderCandidates = info.targetSenderJid ? [info.targetSenderJid] : [meLid, meId].filter(Boolean)
+		const isOwn = (jid: string) =>
+			isLidUser(jid) || isHostedLidUser(jid) ? areJidsSameUser(jid, meLid) : areJidsSameUser(jid, meId)
+		const ownCandidates = targetSenderCandidates.filter(isOwn)
+		if (!info.targetId || !ownCandidates.length) {
 			throw new Error('bot reply does not answer one of our messages')
 		}
 
@@ -318,14 +319,23 @@ export const decryptMessageNode = (
 			throw new Error(MISSING_BOT_MESSAGE_SECRET_TEXT)
 		}
 
-		return decryptBotReplyNode({
-			content,
-			stanzaId: fullMessage.key.id!,
-			info,
-			messageSecret,
-			targetSenderJid,
-			botJid: author
-		})
+		let lastError: unknown
+		for (const targetSenderJid of ownCandidates) {
+			try {
+				return decryptBotReplyNode({
+					content,
+					stanzaId: fullMessage.key.id!,
+					info,
+					messageSecret,
+					targetSenderJid,
+					botJid: author
+				})
+			} catch (err) {
+				lastError = err
+			}
+		}
+
+		throw lastError
 	}
 
 	return {

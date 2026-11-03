@@ -71,6 +71,7 @@ export const makeNoiseHandler = ({
 	let sentIntro = false
 
 	let inBytes: Buffer = Buffer.alloc(0)
+	let decodeChain: Promise<void> = Promise.resolve()
 
 	let transport: TransportState | null = null
 	let isWaitingForTransport = false
@@ -139,8 +140,9 @@ export const makeNoiseHandler = ({
 
 		if (pendingOnFrame) {
 			logger.trace({ length: inBytes.length }, 'Flushing buffered frames after transport ready')
-			await processData(pendingOnFrame)
+			const onFrame = pendingOnFrame
 			pendingOnFrame = null
+			await enqueueProcess(onFrame)
 		}
 	}
 
@@ -168,6 +170,14 @@ export const makeNoiseHandler = ({
 
 			onFrame(frame)
 		}
+	}
+
+	// processData awaits between decrypt and onFrame, so concurrent
+	// decodeFrame calls must be serialized or frames interleave out of order.
+	const enqueueProcess = (onFrame: (buff: Uint8Array | BinaryNode) => void) => {
+		const run = decodeChain.then(() => processData(onFrame))
+		decodeChain = run.catch(() => {})
+		return run
 	}
 
 	authenticate(NOISE_HEADER)
@@ -262,7 +272,7 @@ export const makeNoiseHandler = ({
 				inBytes = Buffer.concat([inBytes, newData])
 			}
 
-			await processData(onFrame)
+			await enqueueProcess(onFrame)
 		}
 	}
 }

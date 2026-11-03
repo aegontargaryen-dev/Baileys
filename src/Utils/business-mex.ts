@@ -24,7 +24,7 @@ const objectArrayAt = (value: unknown, path: string, optional = false): JsonObje
 }
 
 const stringAt = (value: unknown, path: string): string => {
-	if (typeof value !== 'string') return malformedOrder(`${path} is not a string`)
+	if (typeof value !== 'string' || !value.trim()) return malformedOrder(`${path} is not a non-empty string`)
 
 	return value
 }

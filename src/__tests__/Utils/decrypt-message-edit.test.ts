@@ -342,7 +342,13 @@ describe('processEncryptedMessageEdit', () => {
 			editedText: 'cross-addressed group after',
 			targetKey
 		})
-		const lidMapping = createLidMapping()
+		// The editor (PN envelope) and the original author (LID target) are
+		// only known to be the same user through the LID mapping; without it
+		// the edit must be rejected, since every recipient knows the secret.
+		const lidMapping = createLidMapping({
+			[DIRECT_AUTHOR_PN]: DIRECT_AUTHOR_LID,
+			[DIRECT_AUTHOR_LID]: DIRECT_AUTHOR_PN
+		})
 
 		const update = await processEncryptedMessageEdit({
 			message: createEnvelope(
@@ -363,8 +369,49 @@ describe('processEncryptedMessageEdit', () => {
 		})
 
 		expect(getEditedText(update)).toBe('cross-addressed group after')
-		expect(lidMapping.getLIDForPN).not.toHaveBeenCalled()
-		expect(lidMapping.getPNForLID).not.toHaveBeenCalled()
+		expect(lidMapping.getLIDForPN).toHaveBeenCalled()
+	})
+
+	it('rejects a forged group edit from a member who is not the original author', async () => {
+		const attackerPn = '999999999999@s.whatsapp.net'
+		const targetKey = {
+			id: ORIGINAL_ID,
+			remoteJid: GROUP_JID,
+			participant: DIRECT_AUTHOR_LID,
+			fromMe: false
+		}
+		// The attacker knows the original's messageSecret (they received
+		// the original) and seals a cryptographically valid edit naming
+		// the victim as original sender and themselves as editor.
+		const encrypted = sealProtocolMessage({
+			originalSenderJid: DIRECT_AUTHOR_LID,
+			editorJid: attackerPn,
+			editedText: 'forged',
+			targetKey
+		})
+
+		const update = await processEncryptedMessageEdit({
+			message: createEnvelope(
+				{
+					remoteJid: GROUP_JID,
+					participant: attackerPn,
+					fromMe: false,
+					id: ENVELOPE_ID
+				},
+				encrypted
+			),
+			secretEncryptedMessage: encrypted,
+			getMessage: async () => originalMessage(),
+			lidMapping: createLidMapping({
+				[DIRECT_AUTHOR_PN]: DIRECT_AUTHOR_LID,
+				[DIRECT_AUTHOR_LID]: DIRECT_AUTHOR_PN
+			}),
+			logger: createMockLogger(),
+			meId: LOCAL_PN,
+			meLid: LOCAL_LID
+		})
+
+		expect(update).toBeUndefined()
 	})
 
 	it('decrypts repeated edits against the same original message secret', async () => {

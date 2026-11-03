@@ -5,6 +5,7 @@ import {
 	type GroupParticipant,
 	type ParticipantAction,
 	type SocketConfig,
+	WAMessageAddressingMode,
 	type WAMessageKey,
 	WAMessageStubType
 } from '../Types'
@@ -439,12 +440,21 @@ export const extractCommunityMetadata = (result: BinaryNode) => {
 		if (errorNode) {
 			const code = Number(errorNode.attrs.code)
 			throw new Boom(errorNode.attrs.text || 'Community metadata error', {
-				statusCode: Number.isNaN(code) ? undefined : code,
+				statusCode: !Number.isNaN(code) && code >= 400 && code <= 599 ? code : undefined,
 				data: result
 			})
 		}
 
 		throw new Boom('Invalid community metadata response: missing <community> or <group> node', { data: result })
+	}
+
+	const nestedError = getBinaryNodeChild(community, 'error')
+	if (nestedError) {
+		const code = Number(nestedError.attrs.code)
+		throw new Boom(nestedError.attrs.text || 'Community metadata error', {
+			statusCode: !Number.isNaN(code) && code >= 400 && code <= 599 ? code : undefined,
+			data: result
+		})
 	}
 
 	if (!community.attrs.id) {
@@ -487,8 +497,10 @@ export const extractCommunityMetadata = (result: BinaryNode) => {
 			}
 		}),
 		ephemeralDuration: eph ? +eph : undefined,
-		addressingMode: (community.attrs.addressing_mode ||
-			getBinaryNodeChildString(community, 'addressing_mode')) as GroupMetadata['addressingMode']
+		addressingMode:
+			(community.attrs.addressing_mode || getBinaryNodeChildString(community, 'addressing_mode')) === 'lid'
+				? WAMessageAddressingMode.LID
+				: WAMessageAddressingMode.PN
 	}
 	return metadata
 }
