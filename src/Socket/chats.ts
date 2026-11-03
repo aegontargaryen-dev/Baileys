@@ -946,10 +946,10 @@ export const makeChatsSocket = (config: SocketConfig) => {
 		let encodeResult: { patch: proto.ISyncdPatch; state: LTHashState }
 
 		await appStatePatchMutex.mutex(async () => {
+			await resyncAppState([name], false)
+
 			await authState.keys.transaction(async () => {
 				logger.debug({ patch: patchCreate }, 'applying app patch')
-
-				await resyncAppState([name], false)
 
 				const { [name]: currentSyncVersion } = await authState.keys.get('app-state-sync-version', [name])
 				initial = currentSyncVersion ? ensureLTHashStateVersion(currentSyncVersion) : newLTHashState()
