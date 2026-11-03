@@ -1,0 +1,107 @@
+import { type Transform } from 'stream';
+import { proto } from '../../WAProto/index.js';
+import type { AnyMediaMessageContent, AnyMessageContent, MessageContentGenerationOptions, MessageGenerationOptions, MessageGenerationOptionsFromContent, MessageUserReceipt, WAMessage, WAMessageContent, WAMessageKey } from '../Types/index.js';
+import type { ILogger } from './logger.js';
+import { type MediaDownloadOptions } from './messages-media.js';
+import type { PollContext } from './process-message.js';
+type ExtractByKey<T, K extends PropertyKey> = T extends Record<K, any> ? T : never;
+/**
+ * Uses a regex to test whether the string contains a URL, and returns the URL if it does.
+ * @param text eg. hello https://google.com
+ * @returns the URL, eg. https://google.com
+ */
+export declare const extractUrlFromText: (text: string) => string | undefined;
+export declare const generateLinkPreviewIfRequired: (text: string, getUrlInfo: MessageGenerationOptions["getUrlInfo"], logger: MessageGenerationOptions["logger"]) => Promise<import("../Types/index.js").WAUrlInfo | undefined>;
+export declare const prepareWAMessageMedia: (message: AnyMediaMessageContent, options: MessageContentGenerationOptions) => Promise<proto.Message>;
+export declare const prepareDisappearingMessageSettingContent: (ephemeralExpiration?: number) => proto.Message;
+/**
+ * Generate forwarded message content like WA does
+ * @param message the message to forward
+ * @param options.forceForward will show the message as forwarded even if it is from you
+ */
+export declare const generateForwardMessageContent: (message: WAMessage, forceForward?: boolean) => proto.IMessage;
+export declare const hasNonNullishProperty: <K extends PropertyKey>(message: AnyMessageContent, key: K) => message is ExtractByKey<AnyMessageContent, K>;
+export declare const generateWAMessageContent: (message: AnyMessageContent, options: MessageContentGenerationOptions) => Promise<proto.Message>;
+export declare const generateWAMessageFromContent: (jid: string, message: WAMessageContent, options: MessageGenerationOptionsFromContent) => WAMessage;
+export declare const generateWAMessage: (jid: string, content: AnyMessageContent, options: MessageGenerationOptions) => Promise<WAMessage>;
+/** Get the key to access the true type of content */
+export declare const getContentType: (content: proto.IMessage | undefined) => keyof proto.IMessage | undefined;
+/**
+ * Normalizes ephemeral, view once messages to regular message content
+ * Eg. image messages in ephemeral messages, in view once messages etc.
+ * @param content
+ * @returns
+ */
+export declare const normalizeMessageContent: (content: WAMessageContent | null | undefined) => WAMessageContent | undefined;
+/**
+ * Whether the outgoing content is view once media (image, video, round video or audio).
+ * WA Web tags these sends with a `<meta view_once="true"/>` stanza node.
+ * Looks through a disappearing message wrapper. View once wrappers around
+ * anything else (e.g. buttons wrapped so they render) don't count.
+ */
+export declare const isViewOnceMessage: (content: WAMessageContent | null | undefined) => boolean;
+/**
+ * Extract the true message content from a message
+ * Eg. extracts the inner message from a disappearing message/view once message
+ */
+export declare const extractMessageContent: (content: WAMessageContent | undefined | null) => WAMessageContent | undefined;
+/**
+ * Returns the device predicted by message ID
+ */
+export declare const getDevice: (id: string) => "web" | "unknown" | "android" | "ios" | "desktop";
+/** Upserts a receipt in the message */
+export declare const updateMessageWithReceipt: (msg: Pick<WAMessage, "userReceipt">, receipt: MessageUserReceipt) => void;
+/** Update the message with a new reaction */
+export declare const updateMessageWithReaction: (msg: Pick<WAMessage, "reactions">, reaction: proto.IReaction) => void;
+/** Update the message with a new poll update */
+export declare const updateMessageWithPollUpdate: (msg: Pick<WAMessage, "pollUpdates">, update: proto.IPollUpdate) => void;
+/** Update the message with a new event response */
+export declare const updateMessageWithEventResponse: (msg: Pick<WAMessage, "eventResponses">, update: proto.IEventResponse) => void;
+type VoteAggregation = {
+    name: string;
+    voters: string[];
+};
+/**
+ * Encrypt a poll vote, the inverse of `decryptPollVote`
+ * @param vote the vote, with the SHA256 of each chosen option name
+ * @param ctx the poll and the JIDs to encrypt with; the poll's creator decrypts with the same JIDs
+ */
+export declare function encryptPollVote(vote: proto.Message.IPollVoteMessage, { pollCreatorJid, pollMsgId, pollEncKey, voterJid }: PollContext): proto.Message.IPollEncValue;
+/**
+ * Aggregates all poll updates in a poll.
+ * @param msg the poll creation message
+ * @param meId your jid
+ * @returns A list of options & their voters
+ */
+export declare function getAggregateVotesInPollMessage({ message, pollUpdates }: Pick<WAMessage, 'pollUpdates' | 'message'>, meId?: string): VoteAggregation[];
+type ResponseAggregation = {
+    response: string;
+    responders: string[];
+};
+/**
+ * Aggregates all event responses in an event message.
+ * @param msg the event creation message
+ * @param meId your jid
+ * @returns A list of response types & their responders
+ */
+export declare function getAggregateResponsesInEventMessage({ eventResponses }: Pick<WAMessage, 'eventResponses'>, meId?: string): ResponseAggregation[];
+/** Given a list of message keys, aggregates them by chat & sender. Useful for sending read receipts in bulk */
+export declare const aggregateMessageKeysNotFromMe: (keys: WAMessageKey[]) => {
+    jid: string;
+    participant: string | undefined;
+    messageIds: string[];
+}[];
+type DownloadMediaMessageContext = {
+    reuploadRequest: (msg: WAMessage) => Promise<WAMessage>;
+    logger: ILogger;
+};
+/**
+ * Downloads the given message. Throws an error if it's not a media message
+ */
+export declare const downloadMediaMessage: <Type extends "buffer" | "stream">(message: WAMessage, type: Type, options: MediaDownloadOptions, ctx?: DownloadMediaMessageContext) => Promise<Type extends "buffer" ? Buffer<ArrayBufferLike> : Transform>;
+/** Checks whether the given message is a media message; if it is returns the inner content */
+export declare const assertMediaContent: (content: proto.IMessage | null | undefined) => proto.Message.IVideoMessage | proto.Message.IImageMessage | proto.Message.IAudioMessage | proto.Message.IDocumentMessage | proto.Message.IStickerMessage | proto.Message.IStickerPackMessage;
+export declare function createStoredZip(files: Record<string, Uint8Array>): Buffer;
+export declare function readStoredZip(zipBuf: Uint8Array): Record<string, Uint8Array>;
+export {};
+//# sourceMappingURL=messages.d.ts.map

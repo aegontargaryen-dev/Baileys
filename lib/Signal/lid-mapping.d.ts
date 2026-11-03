@@ -1,0 +1,25 @@
+import type { LIDMapping, SignalKeyStoreWithTransaction } from '../Types/index.js';
+import type { ILogger } from '../Utils/logger.js';
+export declare class LIDMappingStore {
+    private readonly mappingCache;
+    private readonly negativeCache;
+    private readonly keys;
+    private readonly logger;
+    private pnToLIDFunc?;
+    onMappingStored?: (mapping: LIDMapping) => void;
+    private readonly inflightLIDLookups;
+    private readonly inflightPNLookups;
+    constructor(keys: SignalKeyStoreWithTransaction, logger: ILogger, pnToLIDFunc?: (jids: string[]) => Promise<LIDMapping[] | undefined>, onMappingStored?: (mapping: LIDMapping) => void);
+    storeLIDPNMappings(pairs: LIDMapping[]): Promise<void>;
+    getLIDForPN(pn: string): Promise<string | null>;
+    getLIDsForPNs(pns: string[]): Promise<LIDMapping[] | null>;
+    private _getLIDsForPNsImpl;
+    getPNForLID(lid: string): Promise<string | null>;
+    getPNsForLIDs(lids: string[]): Promise<LIDMapping[] | null>;
+    private _getPNsForLIDsImpl;
+    /**
+     * Close the cache and release resources
+     */
+    close(): void;
+}
+//# sourceMappingURL=lid-mapping.d.ts.map
