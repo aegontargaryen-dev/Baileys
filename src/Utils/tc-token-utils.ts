@@ -1,4 +1,5 @@
 import { createHmac } from 'node:crypto'
+import type { ILogger } from './logger'
 import type { SignalKeyStoreWithTransaction } from '../Types'
 import type { BinaryNode } from '../WABinary'
 import {
@@ -90,11 +91,18 @@ export function shouldSendNewTcToken(senderTimestamp: number | undefined): boole
 /** Resolve JID to LID for tctoken storage (WA Web stores under LID) */
 export async function resolveTcTokenJid(
 	jid: string,
-	getLIDForPN: (pn: string) => Promise<string | null>
+	getLIDForPN: (pn: string) => Promise<string | null>,
+	logger?: ILogger
 ): Promise<string> {
 	if (isLidUser(jid)) return jid
-	const lid = await getLIDForPN(jid)
-	return lid ?? jid
+	if (!isPnUser(jid)) return jid
+	try {
+		const lid = await getLIDForPN(jid)
+		return lid ?? jid
+	} catch (error: any) {
+		logger?.debug({ jid, err: error?.message }, 'failed to resolve TcToken JID')
+		return jid
+	}
 }
 
 /** Resolve target JID for issuing privacy token based on AB prop 14303 */
@@ -102,18 +110,30 @@ export async function resolveIssuanceJid(
 	jid: string,
 	issueToLid: boolean,
 	getLIDForPN: (pn: string) => Promise<string | null>,
-	getPNForLID?: (lid: string) => Promise<string | null>
+	getPNForLID?: (lid: string) => Promise<string | null>,
+	logger?: ILogger
 ): Promise<string> {
 	if (issueToLid) {
 		if (isLidUser(jid)) return jid
-		const lid = await getLIDForPN(jid)
-		return lid ?? jid
+		if (!isPnUser(jid)) return jid
+		try {
+			const lid = await getLIDForPN(jid)
+			return lid ?? jid
+		} catch (error: any) {
+			logger?.debug({ jid, err: error?.message }, 'failed to resolve Issuance LID JID')
+			return jid
+		}
 	}
 
 	if (!isLidUser(jid)) return jid
 	if (getPNForLID) {
-		const pn = await getPNForLID(jid)
-		return pn ?? jid
+		try {
+			const pn = await getPNForLID(jid)
+			return pn ?? jid
+		} catch (error: any) {
+			logger?.debug({ jid, err: error?.message }, 'failed to resolve Issuance PN JID')
+			return jid
+		}
 	}
 
 	return jid
@@ -126,16 +146,18 @@ type TcTokenParams = {
 		keys: SignalKeyStoreWithTransaction
 	}
 	getLIDForPN: (pn: string) => Promise<string | null>
+	logger?: ILogger
 }
 
 export async function buildTcTokenFromJid({
 	authState,
 	jid,
 	baseContent = [],
-	getLIDForPN
+	getLIDForPN,
+	logger
 }: TcTokenParams): Promise<BinaryNode[] | undefined> {
 	try {
-		const storageJid = await resolveTcTokenJid(jid, getLIDForPN)
+		const storageJid = await resolveTcTokenJid(jid, getLIDForPN, logger)
 		const tcTokenData = await authState.keys.get('tctoken', [storageJid])
 		const entry = tcTokenData?.[storageJid]
 		const tcTokenBuffer = entry?.token
@@ -174,6 +196,7 @@ type StoreTcTokensParams = {
 	keys: SignalKeyStoreWithTransaction
 	getLIDForPN: (pn: string) => Promise<string | null>
 	onNewJidStored?: (jid: string) => void
+	logger?: ILogger
 }
 
 export async function storeTcTokensFromIqResult({
@@ -181,7 +204,8 @@ export async function storeTcTokensFromIqResult({
 	fallbackJid,
 	keys,
 	getLIDForPN,
-	onNewJidStored
+	onNewJidStored,
+	logger
 }: StoreTcTokensParams) {
 	const tokensNode = getBinaryNodeChild(result, 'tokens')
 	if (!tokensNode) return
@@ -195,7 +219,7 @@ export async function storeTcTokensFromIqResult({
 		// In notifications tokenNode.attrs.jid is your own device JID, not the sender's
 		const rawJid = jidNormalizedUser(fallbackJid || tokenNode.attrs.jid)
 		if (!isRegularUser(rawJid)) continue
-		const storageJid = await resolveTcTokenJid(rawJid, getLIDForPN)
+		const storageJid = await resolveTcTokenJid(rawJid, getLIDForPN, logger)
 		const existingTcData = await keys.get('tctoken', [storageJid])
 		const existingEntry = existingTcData[storageJid]
 
