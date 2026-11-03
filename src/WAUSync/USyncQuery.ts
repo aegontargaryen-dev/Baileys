@@ -73,16 +73,20 @@ export class USyncQuery {
 
 		if (listNode?.content && Array.isArray(listNode.content)) {
 			queryResult.list = listNode.content.reduce((acc: USyncQueryResultList[], node) => {
-				const id = node?.attrs.jid
+				const id = node?.attrs?.jid
 				if (id) {
 					const data = Array.isArray(node?.content)
 						? Object.fromEntries(
 								node.content
 									.map(content => {
-										const protocol = content.tag
-										const parser = protocolMap[protocol]
-										if (parser) {
-											return [protocol, parser(content)]
+										const protocol = content?.tag
+										const parser = protocol ? protocolMap[protocol] : undefined
+										if (parser && protocol) {
+											try {
+												return [protocol, parser(content)]
+											} catch {
+												return [protocol, null]
+											}
 										} else {
 											return [protocol, null]
 										}

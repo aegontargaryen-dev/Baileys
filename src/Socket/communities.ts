@@ -16,6 +16,8 @@ import {
 	getBinaryNodeChild,
 	getBinaryNodeChildren,
 	getBinaryNodeChildString,
+	isLidUser,
+	isPnUser,
 	jidEncode,
 	jidNormalizedUser
 } from '../WABinary'
@@ -23,7 +25,7 @@ import { makeBusinessSocket } from './business'
 
 export const makeCommunitiesSocket = (config: SocketConfig) => {
 	const sock = makeBusinessSocket(config)
-	const { authState, ev, query, upsertMessage } = sock
+	const { authState, ev, query, signalRepository, upsertMessage } = sock
 
 	const communityQuery = async (jid: string, type: 'get' | 'set', content: BinaryNode[]) =>
 		query({
@@ -36,9 +38,25 @@ export const makeCommunitiesSocket = (config: SocketConfig) => {
 			content
 		})
 
+	const extractAndPersistCommunityMetadata = (result: BinaryNode) => {
+		const metadata = extractCommunityMetadata(result)
+		const mappings = metadata.participants.flatMap(participant => {
+			const lid = participant.lid || (isLidUser(participant.id) ? participant.id : undefined)
+			const pn = participant.phoneNumber || (isPnUser(participant.id) ? participant.id : undefined)
+			return lid && pn ? [{ lid, pn }] : []
+		})
+		if (mappings.length) {
+			void signalRepository.lidMapping.storeLIDPNMappings(mappings).catch((err: unknown) => {
+				config.logger?.warn({ err }, 'failed to persist community participant LID mappings')
+			})
+		}
+
+		return metadata
+	}
+
 	const communityMetadata = async (jid: string) => {
 		const result = await communityQuery(jid, 'get', [{ tag: 'query', attrs: { request: 'interactive' } }])
-		return extractCommunityMetadata(result)
+		return extractAndPersistCommunityMetadata(result)
 	}
 
 	const communityFetchAllParticipating = async () => {
@@ -65,7 +83,7 @@ export const makeCommunitiesSocket = (config: SocketConfig) => {
 		if (communitiesChild) {
 			const communities = getBinaryNodeChildren(communitiesChild, 'community')
 			for (const communityNode of communities) {
-				const meta = extractCommunityMetadata({
+				const meta = extractAndPersistCommunityMetadata({
 					tag: 'result',
 					attrs: {},
 					content: [communityNode]
@@ -407,7 +425,7 @@ export const makeCommunitiesSocket = (config: SocketConfig) => {
 		),
 		communityGetInviteInfo: async (code: string) => {
 			const results = await communityQuery('@g.us', 'get', [{ tag: 'invite', attrs: { code } }])
-			return extractCommunityMetadata(results)
+			return extractAndPersistCommunityMetadata(results)
 		},
 		communityToggleEphemeral: async (jid: string, ephemeralExpiration: number) => {
 			const content: BinaryNode = ephemeralExpiration
@@ -491,8 +509,10 @@ export const extractCommunityMetadata = (result: BinaryNode) => {
 		memberAddMode,
 		participants: getBinaryNodeChildren(community, 'participant').map(({ attrs }) => {
 			return {
-				// TODO: IMPLEMENT THE PN/LID FIELDS HERE!!
 				id: attrs.jid!,
+				phoneNumber: isLidUser(attrs.jid) && isPnUser(attrs.phone_number) ? attrs.phone_number : undefined,
+				lid: isPnUser(attrs.jid) && isLidUser(attrs.lid) ? attrs.lid : undefined,
+				username: attrs.participant_username || attrs.username || undefined,
 				admin: (attrs.type || null) as GroupParticipant['admin']
 			}
 		}),

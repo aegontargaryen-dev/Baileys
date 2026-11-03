@@ -8,7 +8,7 @@ import {
 	WA_ADV_HOSTED_ACCOUNT_SIG_PREFIX
 } from '../Defaults'
 import type { AuthenticationCreds, SignalCreds, SocketConfig } from '../Types'
-import { type BinaryNode, getBinaryNodeChild, jidDecode, S_WHATSAPP_NET } from '../WABinary'
+import { type BinaryNode, getBinaryNodeChild, jidDecode, S_WHATSAPP_NET, transferDevice } from '../WABinary'
 import { Curve, hmacSign } from './crypto'
 import { encodeBigEndian } from './generics'
 import { createSignalIdentity } from './signal'
@@ -215,7 +215,15 @@ export const configureSuccessfulPairing = (
 	])
 	account.deviceSignature = Curve.sign(signedIdentityKey.private, deviceMsg)
 
-	const identity = createSignalIdentity(lid!, accountSignatureKey!)
+	if (!lid) {
+		throw new Boom('Missing lid in pair success device node', { data: stanza })
+	}
+
+	// The server may send the LID without our companion device id; the
+	// stored identity must carry the same device as the PN jid or session
+	// validation lookups by deviceful LID will miss it.
+	const identityJid = jid && jidDecode(lid)?.device === undefined ? transferDevice(jid, lid) : lid
+	const identity = createSignalIdentity(identityJid, accountSignatureKey!)
 	const accountEnc = encodeSignedDeviceIdentity(account, false)
 
 	const reply: BinaryNode = {

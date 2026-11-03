@@ -17,7 +17,7 @@ import { makeChatsSocket } from './chats'
 
 export const makeGroupsSocket = (config: SocketConfig) => {
 	const sock = makeChatsSocket(config)
-	const { authState, ev, query, upsertMessage } = sock
+	const { authState, ev, query, signalRepository, upsertMessage } = sock
 
 	const groupQuery = async (jid: string, type: 'get' | 'set', content: BinaryNode[]) =>
 		query({
@@ -30,9 +30,27 @@ export const makeGroupsSocket = (config: SocketConfig) => {
 			content
 		})
 
+	// Group metadata is the richest source of participant PN/LID pairs;
+	// persist them so later 1:1 sends and retries resolve without a USync.
+	const extractAndPersistGroupMetadata = (result: BinaryNode) => {
+		const metadata = extractGroupMetadata(result)
+		const mappings = metadata.participants.flatMap(participant => {
+			const lid = participant.lid || (isLidUser(participant.id) ? participant.id : undefined)
+			const pn = participant.phoneNumber || (isPnUser(participant.id) ? participant.id : undefined)
+			return lid && pn ? [{ lid, pn }] : []
+		})
+		if (mappings.length) {
+			void signalRepository.lidMapping.storeLIDPNMappings(mappings).catch((err: unknown) => {
+				config.logger?.warn({ err }, 'failed to persist group participant LID mappings')
+			})
+		}
+
+		return metadata
+	}
+
 	const groupMetadata = async (jid: string) => {
 		const result = await groupQuery(jid, 'get', [{ tag: 'query', attrs: { request: 'interactive' } }])
-		return extractGroupMetadata(result)
+		return extractAndPersistGroupMetadata(result)
 	}
 
 	const groupFetchAllParticipating = async () => {
@@ -59,7 +77,7 @@ export const makeGroupsSocket = (config: SocketConfig) => {
 		if (groupsChild) {
 			const groups = getBinaryNodeChildren(groupsChild, 'group')
 			for (const groupNode of groups) {
-				const meta = extractGroupMetadata({
+				const meta = extractAndPersistGroupMetadata({
 					tag: 'result',
 					attrs: {},
 					content: [groupNode]
@@ -102,7 +120,7 @@ export const makeGroupsSocket = (config: SocketConfig) => {
 					}))
 				}
 			])
-			return extractGroupMetadata(result)
+			return extractAndPersistGroupMetadata(result)
 		},
 		groupLeave: async (id: string) => {
 			await groupQuery('@g.us', 'set', [
@@ -278,7 +296,7 @@ export const makeGroupsSocket = (config: SocketConfig) => {
 		),
 		groupGetInviteInfo: async (code: string) => {
 			const results = await groupQuery('@g.us', 'get', [{ tag: 'invite', attrs: { code } }])
-			return extractGroupMetadata(results)
+			return extractAndPersistGroupMetadata(results)
 		},
 		groupToggleEphemeral: async (jid: string, ephemeralExpiration: number) => {
 			const content: BinaryNode = ephemeralExpiration
