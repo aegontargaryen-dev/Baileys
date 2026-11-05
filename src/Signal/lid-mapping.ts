@@ -18,6 +18,7 @@ export class LIDMappingStore {
 
 	private readonly inflightLIDLookups = new Map<string, Promise<LIDMapping[] | null>>()
 	private readonly inflightPNLookups = new Map<string, Promise<LIDMapping[] | null>>()
+	private storeQueue: Promise<void> = Promise.resolve()
 
 	constructor(
 		keys: SignalKeyStoreWithTransaction,
@@ -32,6 +33,16 @@ export class LIDMappingStore {
 	}
 
 	async storeLIDPNMappings(pairs: LIDMapping[]): Promise<void> {
+		// Serialize batches: the new-or-changed check below reads cache/DB
+		// outside the write transaction, so concurrent duplicate batches
+		// (e.g. a history sync) would otherwise both pass the check and
+		// notify onMappingStored for the same unchanged mapping.
+		const run = this.storeQueue.then(() => this.storeLIDPNMappingsImpl(pairs))
+		this.storeQueue = run.catch(() => {})
+		return run
+	}
+
+	private async storeLIDPNMappingsImpl(pairs: LIDMapping[]): Promise<void> {
 		if (pairs.length === 0) return
 
 		const validatedPairs: Array<{ pnUser: string; lidUser: string }> = []
