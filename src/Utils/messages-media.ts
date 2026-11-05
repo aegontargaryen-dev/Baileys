@@ -605,13 +605,34 @@ export const downloadContentFromMessage = async (
 	return downloadEncryptedContent(downloadUrl, keys, opts)
 }
 
+/** Size in bytes of the truncated HMAC-SHA256 appended to encrypted media */
+export const MEDIA_MAC_SIZE = 10
+
+/**
+ * Programmatic code carried in `error.data.code` when an encrypted media
+ * download fails HMAC verification. Distinguishes permanently corrupt or
+ * truncated media from transient transport failures, so callers can decide
+ * between discarding the media and retrying the download.
+ */
+export const MEDIA_MAC_MISMATCH_CODE = 'MEDIA_MAC_MISMATCH'
+
 /**
  * Decrypts and downloads an AES256-CBC encrypted file given the keys.
- * Assumes the SHA256 of the plaintext is appended to the end of the ciphertext
- * */
+ * The encrypted body ends with a {@link MEDIA_MAC_SIZE}-byte truncated
+ * HMAC-SHA256 (keyed with `macKey`, computed over `iv + ciphertext`).
+ *
+ * When `macKey` is present and the download is not ranged
+ * (`startByte`/`endByte` unset), that MAC is verified in streaming before
+ * the final decrypted block is released. On mismatch the returned stream
+ * errors with a `Boom` whose `output.statusCode` is 422 and whose
+ * `data.code` is {@link MEDIA_MAC_MISMATCH_CODE} — branch on those fields,
+ * not on the message text, to tell permanently corrupt/truncated media
+ * apart from transport errors. Callers that pass only `cipherKey`/`iv`,
+ * and ranged downloads, keep the previous unverified behavior.
+ */
 export const downloadEncryptedContent = async (
 	downloadUrl: string,
-	{ cipherKey, iv }: MediaDecryptionKeyInfo,
+	{ cipherKey, iv, macKey }: MediaDecryptionKeyInfo,
 	{ startByte, endByte, options }: MediaDownloadOptions = {}
 ) => {
 	let bytesFetched = 0
@@ -648,6 +669,11 @@ export const downloadEncryptedContent = async (
 	})
 
 	let remainingBytes = Buffer.from([])
+
+	// Ranged downloads never hold the whole file, so the trailing MAC can
+	// only be checked on full downloads that came with a macKey. The HMAC
+	// covers iv + ciphertext, mirroring encryptedStream on upload.
+	const hmac = macKey && !startByte && !endByte ? Crypto.createHmac('sha256', macKey).update(iv) : undefined
 
 	let aes: Crypto.Decipher
 
@@ -692,6 +718,10 @@ export const downloadEncryptedContent = async (
 			}
 
 			try {
+				// every block-aligned slice fed to the decipher is ciphertext
+				// exactly once and in order; the trailing MAC always stays
+				// behind in remainingBytes, so it never enters the HMAC
+				hmac?.update(data)
 				pushBytes(aes.update(data), b => this.push(b))
 				callback()
 			} catch (error: any) {
@@ -703,8 +733,23 @@ export const downloadEncryptedContent = async (
 				// A complete download ends with the decipher initialized and
 				// at most the trailing 10-byte MAC undecrypted; anything else
 				// is a truncated body and must not pass as a successful download.
-				if (!endByte && (!aes || (remainingBytes.length !== 0 && remainingBytes.length !== 10))) {
+				if (!endByte && (!aes || (remainingBytes.length !== 0 && remainingBytes.length !== MEDIA_MAC_SIZE))) {
 					return callback(new Boom('Encrypted media download is empty or truncated', { statusCode: 502 }))
+				}
+
+				// verify before aes.final() releases the last plaintext block:
+				// a block-aligned truncation can still carry valid PKCS7
+				// padding, so only the MAC proves the body is whole
+				if (hmac) {
+					const computedMac = hmac.digest().slice(0, MEDIA_MAC_SIZE)
+					if (remainingBytes.length !== MEDIA_MAC_SIZE || !Crypto.timingSafeEqual(computedMac, remainingBytes)) {
+						return callback(
+							new Boom('Encrypted media MAC verification failed', {
+								statusCode: 422,
+								data: { code: MEDIA_MAC_MISMATCH_CODE }
+							})
+						)
+					}
 				}
 
 				if (aes) {

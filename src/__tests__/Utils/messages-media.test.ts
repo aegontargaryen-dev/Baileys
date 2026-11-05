@@ -1,4 +1,4 @@
-import { createCipheriv } from 'crypto'
+import { createCipheriv, createHmac } from 'crypto'
 import { hkdfSync, randomBytes } from 'crypto'
 import * as fs from 'fs'
 import * as http from 'http'
@@ -15,7 +15,9 @@ import {
 	downloadEncryptedContent,
 	encryptedStream,
 	encryptMediaRetryRequest,
+	getMediaKeys,
 	getWAUploadToServer,
+	MEDIA_MAC_MISMATCH_CODE,
 	toBuffer,
 	type UploadParams,
 	uploadWithNodeHttp
@@ -457,6 +459,143 @@ describe('downloadEncryptedContent', () => {
 		const stream = await downloadEncryptedContent('https://mmg.whatsapp.net/media', { cipherKey, iv })
 
 		await expect(toBuffer(stream)).resolves.toEqual(plaintext)
+	})
+
+	describe('MAC verification', () => {
+		const cipherKey = Buffer.alloc(32, 1)
+		const iv = Buffer.alloc(16, 2)
+		const macKey = Buffer.alloc(32, 3)
+		const keys = { cipherKey, iv, macKey }
+
+		// mirror of the upload side: AES-256-CBC + trailing HMAC-SHA256(iv + ciphertext)[:10]
+		const buildEncryptedBody = (plaintext: Buffer) => {
+			const cipher = createCipheriv('aes-256-cbc', cipherKey, iv)
+			const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()])
+			const mac = createHmac('sha256', macKey).update(iv).update(ciphertext).digest().slice(0, 10)
+			return { ciphertext, mac, body: Buffer.concat([ciphertext, mac]) }
+		}
+
+		const serveBodyInChunks = (body: Buffer, chunkSize = 7) => {
+			globalThis.fetch = (async () =>
+				new Response(
+					new ReadableStream<Uint8Array>({
+						start(controller) {
+							for (let i = 0; i < body.length; i += chunkSize) {
+								controller.enqueue(body.slice(i, i + chunkSize))
+							}
+
+							controller.close()
+						}
+					})
+				)) as typeof fetch
+		}
+
+		const expectMacMismatch = async (stream: Awaited<ReturnType<typeof downloadEncryptedContent>>) => {
+			const error = await toBuffer(stream).then(
+				() => {
+					throw new Error('expected download to reject with a MAC mismatch')
+				},
+				(err: any) => err
+			)
+			expect(error.message).toBe('Encrypted media MAC verification failed')
+			expect(error.output?.statusCode).toBe(422)
+			expect(error.data?.code).toBe(MEDIA_MAC_MISMATCH_CODE)
+		}
+
+		it('decrypts an intact body when macKey is present', async () => {
+			const plaintext = Buffer.from('media payload with a valid trailing MAC, long enough for several blocks')
+			const { body } = buildEncryptedBody(plaintext)
+			serveBodyInChunks(body)
+
+			const stream = await downloadEncryptedContent('https://mmg.whatsapp.net/media', keys)
+
+			await expect(toBuffer(stream)).resolves.toEqual(plaintext)
+		})
+
+		it('rejects a block-aligned truncated body whose last block has valid PKCS7 padding', async () => {
+			// first plaintext block ends in 0x01, so keeping only its ciphertext
+			// block decrypts with valid padding and passes today as partial media
+			const plaintext = Buffer.concat([
+				Buffer.alloc(15, 'a'),
+				Buffer.from([1]),
+				Buffer.from('the rest of the media that never arrived')
+			])
+			const { ciphertext } = buildEncryptedBody(plaintext)
+			serveBodyInChunks(ciphertext.slice(0, 16))
+
+			const stream = await downloadEncryptedContent('https://mmg.whatsapp.net/media', keys)
+
+			await expectMacMismatch(stream)
+		})
+
+		it('rejects when a byte in the middle of the ciphertext is corrupted', async () => {
+			const plaintext = Buffer.from('media payload long enough that corrupting block one keeps padding valid')
+			const { body } = buildEncryptedBody(plaintext)
+			const corrupted = Buffer.from(body)
+			corrupted.writeUInt8(corrupted.readUInt8(0) ^ 0xff, 0)
+			serveBodyInChunks(corrupted)
+
+			const stream = await downloadEncryptedContent('https://mmg.whatsapp.net/media', keys)
+
+			await expectMacMismatch(stream)
+		})
+
+		it('keeps the current behavior for ranged downloads (no MAC verification)', async () => {
+			const plaintext = Buffer.from('media payload for ranged download checks!!')
+			const { body } = buildEncryptedBody(plaintext)
+			const corrupted = Buffer.from(body)
+			corrupted.writeUInt8(corrupted.readUInt8(0) ^ 0xff, 0)
+			serveBodyInChunks(corrupted)
+
+			const rangedStream = await downloadEncryptedContent('https://mmg.whatsapp.net/media', keys, { endByte: 10 })
+
+			await expect(toBuffer(rangedStream)).resolves.toHaveLength(10)
+		})
+
+		it('keeps the current behavior for startByte ranged downloads (no MAC verification)', async () => {
+			const plaintext = Buffer.from('media payload for ranged download checks!!')
+			const { body } = buildEncryptedBody(plaintext)
+			serveBodyInChunks(body)
+
+			const rangedStream = await downloadEncryptedContent('https://mmg.whatsapp.net/media', keys, {
+				startByte: 16,
+				endByte: 26
+			})
+
+			await expect(toBuffer(rangedStream)).resolves.toEqual(plaintext.slice(16, 26))
+		})
+
+		it('verifies a body produced by encryptedStream (upload roundtrip)', async () => {
+			const plaintext = Buffer.from('roundtrip payload encrypted by the real upload path')
+			const { mediaKey, encFilePath } = await encryptedStream(plaintext, 'image')
+			try {
+				const body = await fs.promises.readFile(encFilePath)
+				serveBodyInChunks(body, 5)
+
+				const stream = await downloadEncryptedContent(
+					'https://mmg.whatsapp.net/media',
+					await getMediaKeys(mediaKey, 'image')
+				)
+
+				await expect(toBuffer(stream)).resolves.toEqual(plaintext)
+			} finally {
+				await fs.promises.unlink(encFilePath).catch(() => {})
+			}
+		})
+
+		it('keeps the current behavior when the caller provides no macKey', async () => {
+			const plaintext = Buffer.concat([
+				Buffer.alloc(15, 'a'),
+				Buffer.from([1]),
+				Buffer.from('the rest of the media that never arrived')
+			])
+			const { ciphertext } = buildEncryptedBody(plaintext)
+			serveBodyInChunks(ciphertext.slice(0, 16))
+
+			const stream = await downloadEncryptedContent('https://mmg.whatsapp.net/media', { cipherKey, iv })
+
+			await expect(toBuffer(stream)).resolves.toEqual(Buffer.alloc(15, 'a'))
+		})
 	})
 
 	it('destroys the response body when the returned stream is cancelled', async () => {
