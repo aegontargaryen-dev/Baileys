@@ -105,11 +105,30 @@ export type MediaDownloadOptions = {
 };
 export declare const getUrlFromDirectPath: (directPath: string, host?: string) => string;
 export declare const downloadContentFromMessage: ({ mediaKey, directPath, url }: DownloadableMessage, type: MediaType, opts?: MediaDownloadOptions) => Promise<Readable>;
+/** Size in bytes of the truncated HMAC-SHA256 appended to encrypted media */
+export declare const MEDIA_MAC_SIZE = 10;
+/**
+ * Programmatic code carried in `error.data.code` when an encrypted media
+ * download fails HMAC verification. Distinguishes permanently corrupt or
+ * truncated media from transient transport failures, so callers can decide
+ * between discarding the media and retrying the download.
+ */
+export declare const MEDIA_MAC_MISMATCH_CODE = "MEDIA_MAC_MISMATCH";
 /**
  * Decrypts and downloads an AES256-CBC encrypted file given the keys.
- * Assumes the SHA256 of the plaintext is appended to the end of the ciphertext
- * */
-export declare const downloadEncryptedContent: (downloadUrl: string, { cipherKey, iv }: MediaDecryptionKeyInfo, { startByte, endByte, options }?: MediaDownloadOptions) => Promise<Transform>;
+ * The encrypted body ends with a {@link MEDIA_MAC_SIZE}-byte truncated
+ * HMAC-SHA256 (keyed with `macKey`, computed over `iv + ciphertext`).
+ *
+ * When `macKey` is present and the download is not ranged
+ * (`startByte`/`endByte` unset), that MAC is verified in streaming before
+ * the final decrypted block is released. On mismatch the returned stream
+ * errors with a `Boom` whose `output.statusCode` is 422 and whose
+ * `data.code` is {@link MEDIA_MAC_MISMATCH_CODE} — branch on those fields,
+ * not on the message text, to tell permanently corrupt/truncated media
+ * apart from transport errors. Callers that pass only `cipherKey`/`iv`,
+ * and ranged downloads, keep the previous unverified behavior.
+ */
+export declare const downloadEncryptedContent: (downloadUrl: string, { cipherKey, iv, macKey }: MediaDecryptionKeyInfo, { startByte, endByte, options }?: MediaDownloadOptions) => Promise<Transform>;
 export declare function extensionForMediaMessage(message: WAMessageContent): string;
 type MediaUploadResult = {
     url?: string;
