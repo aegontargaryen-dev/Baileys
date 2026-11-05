@@ -9,8 +9,10 @@ export declare class LIDMappingStore {
     onMappingStored?: (mapping: LIDMapping) => void;
     private readonly inflightLIDLookups;
     private readonly inflightPNLookups;
+    private storeQueue;
     constructor(keys: SignalKeyStoreWithTransaction, logger: ILogger, pnToLIDFunc?: (jids: string[]) => Promise<LIDMapping[] | undefined>, onMappingStored?: (mapping: LIDMapping) => void);
     storeLIDPNMappings(pairs: LIDMapping[]): Promise<void>;
+    private storeLIDPNMappingsImpl;
     getLIDForPN(pn: string): Promise<string | null>;
     getLIDsForPNs(pns: string[]): Promise<LIDMapping[] | null>;
     private _getLIDsForPNsImpl;
