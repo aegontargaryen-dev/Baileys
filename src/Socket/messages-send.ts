@@ -1478,9 +1478,11 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 				// Resolve PN -> LID before the message key is created so the
 				// emitted/returned key, the wire stanza and retry receipts all
 				// name the same chat. relayMessage rewrites too, but only its
-				// local copy. Legacy PN-only accounts (no own LID) keep PN.
+				// local copy, and it does so without requiring an own LID — so
+				// this resolution must not be gated on me.lid either, or legacy
+				// PN-only accounts would send to the LID chat while the key
+				// still names the PN chat.
 				if (
-					authState.creds.me?.lid &&
 					jidDecode(jid)?.server === 's.whatsapp.net' &&
 					!jidDecode(jid)?.device &&
 					!areJidsSameUser(jid, authState.creds.me?.id)

@@ -148,6 +148,10 @@ export const cleanMessage = (message: WAMessage, meId: string, meLid: string) =>
 		normaliseKey(content.pollUpdateMessage.pollCreationMessageKey)
 	}
 
+	if (content?.encEventResponseMessage?.eventCreationMessageKey) {
+		normaliseKey(content.encEventResponseMessage.eventCreationMessageKey)
+	}
+
 	function normaliseKey(msgKey: WAMessageKey) {
 		// if the reaction is from another user
 		// we've to correctly map the key to this user's perspective

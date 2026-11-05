@@ -120,6 +120,55 @@ describe('cleanMessage', () => {
 		})
 	})
 
+	describe('Event Response Message Perspective', () => {
+		it("should correct the perspective of a peer's response to an event I created", () => {
+			// 1:1 chat with the peer; from the peer's perspective the event I
+			// created has fromMe=false and the chat JID pointing at me. getMessage
+			// implementations that only serve own messages key on fromMe + the
+			// local chat JID, so the key must be flipped before lookup.
+			const message = createBaseMessage(
+				{ remoteJid: otherUserId, fromMe: false },
+				{
+					encEventResponseMessage: {
+						eventCreationMessageKey: {
+							remoteJid: meId,
+							fromMe: false,
+							id: 'EVENT_I_CREATED'
+						}
+					}
+				}
+			)
+
+			cleanMessage(message, meId, meLid)
+
+			const creationKey = message.message!.encEventResponseMessage!.eventCreationMessageKey!
+			expect(creationKey.fromMe).toBe(true)
+			expect(creationKey.remoteJid).toBe(otherUserId)
+		})
+
+		it("should correct the perspective of a peer's event response in a group via participant", () => {
+			const message = createBaseMessage(
+				{ remoteJid: '123456-7890@g.us', fromMe: false, participant: otherUserId },
+				{
+					encEventResponseMessage: {
+						eventCreationMessageKey: {
+							remoteJid: '123456-7890@g.us',
+							fromMe: false,
+							id: 'EVENT_I_CREATED',
+							participant: meId
+						}
+					}
+				}
+			)
+
+			cleanMessage(message, meId, meLid)
+
+			const creationKey = message.message!.encEventResponseMessage!.eventCreationMessageKey!
+			expect(creationKey.fromMe).toBe(true)
+			expect(creationKey.remoteJid).toBe('123456-7890@g.us')
+		})
+	})
+
 	describe('Edge Cases', () => {
 		it('should not crash if JIDs are undefined', () => {
 			const message = createBaseMessage({

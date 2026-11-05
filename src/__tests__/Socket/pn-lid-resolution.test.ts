@@ -172,6 +172,41 @@ describe('PN to LID Resolution (Issues #2683, #2698, #2688)', () => {
 		expect(sent?.key.remoteJid).toBe('98765@lid')
 	})
 
+	it('should align key and wire stanza when resolving PN to LID without me.lid', async () => {
+		// Legacy PN-only account: relayMessage resolves PN -> LID unconditionally,
+		// so the key sendMessage creates must resolve too, or key and wire stanza
+		// name different chats.
+		config.auth.creds.me = { id: 'me@s.whatsapp.net' }
+		mockLidMapping.getLIDForPN.mockResolvedValue('98765@lid')
+
+		const sock = createTestSocket()
+
+		const sent = await sock.sendMessage('12345@s.whatsapp.net', { text: 'test' })
+
+		expect(mockLidMapping.getLIDForPN).toHaveBeenCalledWith('12345@s.whatsapp.net')
+		expect(sent?.key.remoteJid).toBe('98765@lid')
+
+		// decode the wire stanza actually sent and compare its destination
+		const sendMock = WebSocketClient.prototype.send as unknown as jest.Mock
+		let stanzaTo: string | undefined
+		for (const [data] of sendMock.mock.calls) {
+			const buf = Buffer.from(data as Buffer)
+			for (let offset = 0; offset < 20 && offset < buf.length && !stanzaTo; offset++) {
+				try {
+					const decoded: any = await decodeBinaryNode(buf.slice(offset))
+					if (decoded?.tag === 'message') {
+						stanzaTo = decoded.attrs.to
+					}
+				} catch {
+					// try next offset
+				}
+			}
+		}
+
+		expect(stanzaTo).toBeDefined()
+		expect(sent?.key.remoteJid).toBe(stanzaTo)
+	})
+
 	it('should keep destination JID unchanged when sending directly to LID', async () => {
 		const sock = createTestSocket()
 
